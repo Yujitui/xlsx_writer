@@ -12,7 +12,7 @@ pub enum XlsxError {
 
     /// 工作表名稱不合法時觸發。
     ///
-    /// 不合法的定義包括：空字符串、長度超過 31 個字符、或包含 [`FORBIDDEN_SHEET_NAME_CHARS`]。
+    /// 不合法的定義包括：空字符串、長度超過 31 個字符、或包含禁用字符。
     #[error("工作表名稱 '{0}' 不可用")]
     InvalidName(String),
 
