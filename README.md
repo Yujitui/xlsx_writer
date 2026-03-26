@@ -49,7 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✨ Excel 導出成功！");
     Ok(())
 }
-请谨慎使用此类代码。
 
 🛠️ 預設樣式池
 本工具默認提供以下樣式標籤，可直接在 style_map 中使用：
