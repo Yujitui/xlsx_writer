@@ -1,0 +1,28 @@
+[package]
+name = "xlsx_writer"
+version = "0.1.0"                  # 你的版本號
+edition = "2021"                   # Rust 版本
+authors = ["Your Name <email@example.com>"]
+description = "一個基於 Polars 和 rust_xlsxwriter 的自動化 Excel 導出工具，支持跨平台字體自適應和動態樣式。"
+
+[dependencies]
+# Polars 核心庫：
+# 必須開啟 "lazy" 以支持 .lazy() 操作
+# 建議開啟 "dtype-full" 以支持多種數據類型的轉換
+polars = { version = "0.53.0", features = ["lazy", "dtype-full", "fmt"] }
+
+# Excel 引擎：
+# 負責物理文件的生成與樣式控制
+rust_xlsxwriter = "0.94.0"
+
+# 錯誤處理工具：
+# 用於簡化自定義錯誤枚舉的 Display 實現
+thiserror = "2.0.18"
+
+# 數據類型支持：
+# 確保 HashMap 等基礎工具可用
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+# 僅用於測試的依賴（可選）
+anyhow = "1.0"
