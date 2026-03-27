@@ -247,6 +247,23 @@ impl Workbook {
                         AnyValue::Float64(v) => worksheet.write_number_with_format(r, c, v, cell_fmt)?,
                         AnyValue::String(s) => worksheet.write_string_with_format(r, c, s, cell_fmt)?,
                         AnyValue::Boolean(v) => worksheet.write_boolean_with_format(r, c, v, cell_fmt)?,
+                        AnyValue::Date(days) => {
+                            // 1. 转换基准：Polars 天数 + 25569 = Excel 天数
+                            let excel_date_num = (days as f64) + 25569.0;
+                            // 2. 在 Excel 中，日期本质上就是带格式的数字
+                            worksheet.write_number_with_format(r, c, excel_date_num, cell_fmt)?
+                        }
+                        AnyValue::Datetime(v, unit, _) => {
+                            let seconds = match unit {
+                                TimeUnit::Milliseconds => v / 1_000,
+                                TimeUnit::Microseconds => v / 1_000_000,
+                                TimeUnit::Nanoseconds => v / 1_000_000_000,
+                            } as f64;
+                            // 将 Unix 秒数转换为 Excel 天数：秒数 / 86400 + 25569
+                            let excel_dt_num = (seconds / 86400.0) + 25569.0;
+
+                            worksheet.write_number_with_format(r, c, excel_dt_num, cell_fmt)?
+                        }
                         AnyValue::Null => {
                             // Null 值也寫入 blank 以保持單元格邊框一致
                             worksheet.write_blank(r, c, cell_fmt)?
