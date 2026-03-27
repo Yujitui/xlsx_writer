@@ -8,6 +8,7 @@ pub use crate::worksheet::WorkSheet;
 pub use crate::style_factory::StyleFactory;
 pub use crate::style_factory::rules::{StyleRule, ApplyAction, StyleOverride};
 pub use crate::style_factory::condition::Condition;
+pub use crate::style_library::{StyleLibrary, StyleDefinition};
 
 // 3. 錯誤體系
 pub use crate::error::XlsxError;
