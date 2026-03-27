@@ -1,9 +1,11 @@
-pub mod error;
-pub mod worksheet;
-pub mod workbook;
+mod error;
+mod workbook;
+mod worksheet;
+pub mod style_factory;
 pub mod prelude;
+// 导出工厂模块
 
-// 將核心結構提升到根路徑（可選，方便用戶使用）
+pub use error::XlsxError;
 pub use workbook::Workbook;
 pub use worksheet::WorkSheet;
-pub use error::XlsxError;
+pub use style_factory::StyleFactory; // 常用组件提升到顶层

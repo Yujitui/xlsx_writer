@@ -118,7 +118,7 @@ impl Workbook {
     /// * [`XlsxError::DuplicateName`] - 名稱與現有工作表衝突。
     /// * [`XlsxError::UnknownStyle`] - 引用了未定義的樣式標籤。
     /// * `Box<dyn Error>` - 其他未預期的構建錯誤。
-    pub fn insert(mut self, df: DataFrame, name: Option<String>, style_map: Option<HashMap<(u32, u16), String>>) -> Result<Self, Box<dyn Error>> {
+    pub fn insert(mut self, df: DataFrame, name: Option<String>, style_map: Option<HashMap<(u32, u16), Arc<str>>>) -> Result<Self, Box<dyn Error>> {
         // 1. 定義輔助閉包：封裝默認命名邏輯，確保命名的一致性與唯一性起點
         let get_default_name = |sheets_len: usize| format!("Sheet {}", sheets_len + 1);
 
@@ -152,7 +152,7 @@ impl Workbook {
         // 確保數據在寫入時能找到對應的格式定義，防止 save 時出現懸空引用。
         if let Some(ref map) = task.style_map {
             for style_name in map.values() {
-                if !self.styles.contains_key(style_name) {
+                if !self.styles.contains_key(style_name.as_ref()) {
                     return Err(Box::new(XlsxError::UnknownStyle(style_name.clone())));
                 }
             }
@@ -210,7 +210,7 @@ impl Workbook {
 
                 let header_cell_fmt = sheet.style_map.as_ref()
                     .and_then(|m| m.get(&(0, c)))         // 嘗試從地圖找
-                    .and_then(|name| self.styles.get(name))
+                    .and_then(|name| self.styles.get(name.as_ref()))
                     .or_else(|| {                        // 如果地圖沒定義或地圖不存在
                         if sheet.style_map.is_none() {
                             self.styles.get("header")    // 自動應用預設 header
@@ -230,7 +230,7 @@ impl Workbook {
                     // 獲取該單元格專屬樣式或全局保底樣式
                     let cell_fmt = sheet.style_map.as_ref()
                         .and_then(|m| m.get(&(r, c)))
-                        .and_then(|name| self.styles.get(name))
+                        .and_then(|name| self.styles.get(name.as_ref()))
                         .or(default_fmt)
                         .unwrap_or(&fallback_fmt); // 同理
 

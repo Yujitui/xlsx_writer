@@ -22,7 +22,7 @@ pub struct WorkSheet {
     ///
     /// 鍵為 `(行, 列)` 坐標，值為預定義樣式池中的樣式名稱。
     /// 行號 `0` 對應表頭，`1..N` 對應數據行。
-    pub style_map: Option<HashMap<(u32, u16), String>>,
+    pub style_map: Option<HashMap<(u32, u16), std::sync::Arc<str>>>,
 
 }
 
@@ -38,7 +38,7 @@ impl WorkSheet {
     /// # 錯誤 (Returns)
     /// * [`XlsxError::EmptyDataFrame`] - 如果數據表沒有任何行或列。
     /// * [`XlsxError::InvalidName`] - 如果名稱不符合 Excel 命名規範（長度、字符、空值）。
-    pub fn new(df: DataFrame, name: String, style_map: Option<HashMap<(u32, u16), String>>) -> Result<Self, XlsxError> {
+    pub fn new(df: DataFrame, name: String, style_map: Option<HashMap<(u32, u16), std::sync::Arc<str>>>) -> Result<Self, XlsxError> {
         // 1. 嚴格數據校驗：拒絕導出空表，確保物理意義上的導出可行性。
         if df.height() == 0 || df.width() == 0 { return Err(XlsxError::EmptyDataFrame); }
 

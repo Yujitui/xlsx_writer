@@ -9,7 +9,7 @@ description = "一個基於 Polars 和 rust_xlsxwriter 的自動化 Excel 導出
 # Polars 核心庫：
 # 必須開啟 "lazy" 以支持 .lazy() 操作
 # 建議開啟 "dtype-full" 以支持多種數據類型的轉換
-polars = { version = "0.53.0", features = ["lazy", "dtype-full", "fmt"] }
+polars = { version = "0.53.0", features = ["lazy", "dtype-full", "fmt", "strings"] }
 
 # Excel 引擎：
 # 負責物理文件的生成與樣式控制
@@ -22,7 +22,8 @@ thiserror = "2.0.18"
 # 數據類型支持：
 # 確保 HashMap 等基礎工具可用
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.149"
 
 [dev-dependencies]
 # 僅用於測試的依賴（可選）
-anyhow = "1.0"
+# anyhow = "1.0"

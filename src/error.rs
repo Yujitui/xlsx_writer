@@ -22,7 +22,7 @@ pub enum XlsxError {
 
     /// 當單元格指定的樣式標籤（String）在 Exporter 的樣式緩存池中找不到時觸發。
     #[error("樣式名 '{0}' 未在樣式池中定義")]
-    UnknownStyle(String),
+    UnknownStyle(std::sync::Arc<str>),
 
     /// 封裝標準庫的 IO 錯誤（如路徑無權限、磁盤空間不足）。
     ///
