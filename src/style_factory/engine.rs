@@ -20,29 +20,26 @@ pub struct StyleFactory {
 
 impl StyleFactory {
 
-    /// 從 `serde_json::Value` 對象構造 `StyleFactory` 實例。
-    ///
-    /// 該方法專注於數據的層級提取與類型轉換，是實現動態配置加載的核心。
+    /// 創建一個新的 `StyleFactory` 實例。
     ///
     /// # 參數
-    /// * `data` - 已解析的 JSON 數組或對象。預期包含一個名為 `"rules"` 的鍵。
+    /// * `value` - 預期為一個 JSON Array，包含多條 [`StyleRule`] 定義。
     ///
-    /// # 邏輯流程
-    /// 1. **路徑提取**：從輸入的 JSON 根節點定位到 `"rules"` 數組。
-    /// 2. **強類型轉換**：利用 `serde_json::from_value` 將 JSON 片段轉化為 `Vec<StyleRule>`。
-    /// 3. **狀態檢查**：如果規則集為空，向標準錯誤流輸出警告，但仍允許構建成功（支持空導出模式）。
-    ///
-    /// # 錯誤 (Returns)
-    /// * `Box<dyn std::error::Error>` - 如果 JSON 結構不符合 [`StyleRule`] 的定義，則拋出反序列化異常。
-    pub fn new(data: serde_json::Value) -> Result<Self, Box<dyn std::error::Error>> {
-        // 從 JSON 根對象中提取 "rules" 鍵。
-        // 若 "rules" 不存在，serde_json 會返回 Null 值，隨後的反序列化將捕獲此異常。
-        let rules: Vec<StyleRule> = serde_json::from_value(data["rules"].clone())?;
-
-        // 防禦性檢查：空規則集雖然技術上合法，但通常意味著配置文件加載異常。
-        if rules.is_empty() {
-            eprintln!("Warning: StyleFactory initialized with empty rules.");
-        }
+    /// # 邏輯變更說明
+    /// 為了保持與 `StyleLibrary` 的行為統一，該函數不再從全局配置中尋找 "rules" 鍵，
+    /// 而是直接解析傳入的片段。這要求調用方在傳入前先執行 `.get("rules")`。
+    pub fn new(value: serde_json::Value) -> Result<Self, Box<dyn std::error::Error>> {
+        // 1. 執行輸入類型檢查與自動修正
+        let rules: Vec<StyleRule> = if value.is_array() {
+            // 如果是正常的數組，執行標準反序列化
+            serde_json::from_value(value)?
+        } else {
+            // 如果是 Null 或其它無效類型，靜默降級為空
+            if !value.is_null() {
+                eprintln!("Warning: StyleFactory input is not a valid array, using empty rules.");
+            }
+            vec![]
+        };
 
         Ok(Self { rules })
     }

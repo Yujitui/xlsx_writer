@@ -204,16 +204,17 @@ impl StyleLibrary {
     ///
     /// # 錯誤處理
     /// 若傳入的 JSON 片段與映射表結構不符（例如非對象格式），則返回反序列化錯誤。
-    pub fn insert_from_json(mut self, value: &serde_json::Value) -> Result<Self, Box<dyn std::error::Error>> {
-        // 1. 將傳入的片段解析為臨時的映射表
-        let new: HashMap<String, StyleDefinition> = serde_json::from_value(value.clone())?;
-
-        // 2. 批量合併到現有的樣式庫中
-        for (name, def) in new {
-            self.styles.insert(name, def);
+    pub fn insert_from_json(self, value: &serde_json::Value) -> Result<Self, Box<dyn std::error::Error>> {
+        // 1. 檢查是否為有效的 JSON Object
+        if !value.is_object() {
+            // 返回一個空的庫實例，並可選擇性打印警告
+            eprintln!("Warning: StyleLibrary input is not a valid object, using empty library.");
+            return Ok(Self::new());
         }
 
-        Ok(self)
+        // 2. 只有是 Object 時才執行解析
+        let definitions: HashMap<String, StyleDefinition> = serde_json::from_value(value.clone())?;
+        Ok(Self { styles: definitions })
     }
 
     /// 將資源庫中所有的抽象定義轉換為物理樣式對象池。

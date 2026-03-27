@@ -5,6 +5,8 @@ use rust_xlsxwriter::*;
 use crate::worksheet::WorkSheet;
 use crate::error::XlsxError;
 use std::fmt;
+use crate::style_library::StyleLibrary;
+use crate::StyleFactory;
 
 /// Excel 導出管理器（核心容器）。
 ///
@@ -77,6 +79,55 @@ impl Workbook {
             styles,
             sheets: vec![],
         })
+    }
+
+    /// 將已構建的樣式資源庫（StyleLibrary）批量注入工作簿。
+    ///
+    /// 該方法是樣式系統的「物理裝載點」。它會觸發資源庫中所有抽象定義的物質化（Materialization），
+    /// 並將生成的 `Format` 對象存入 `Workbook` 的全局樣式池中。
+    ///
+    /// # 運作機制
+    /// 1. 調用 `library.build_formats()`：遍歷所有 JSON 定義，執行顏色解析、枚舉映射與屬性鏈式賦值。
+    /// 2. 批量註冊：將產出的 `HashMap<String, Format>` 併入 `self.styles`。
+    ///
+    /// # 設計意圖
+    /// 用於處理「對象級別」的集成。當開發者在代碼中手動修改過 `StyleLibrary`（例如通過 `.insert()` 增加動態樣式）後，
+    /// 使用此函數可以將最終確定的樣式集一鍵同步至工作簿。
+    pub fn with_library(mut self, library: &StyleLibrary) -> Self {
+        // 調用 Library 內部的批量轉換邏輯
+        let formats = library.build_formats();
+
+        for (name, fmt) in formats {
+            // 利用現有的 set_style 實現，將 Format 存入 Workbook.styles
+            self = self.set_style(&name, fmt);
+        }
+
+        self
+    }
+
+    /// 從 JSON 配置片段直接加載並應用樣式定義。
+    ///
+    /// 該方法是樣式系統的「配置入口點」。它在內部封裝了 `StyleLibrary` 的構造與解析邏輯，
+    /// 實現了從原始數據到物理樣式的自動化轉換。
+    ///
+    /// # 參數
+    /// * `value` - 預期為一個 JSON Object 指針。該對象的鍵為樣式標籤，值為具體的屬性描述（符合 `StyleDefinition` 結構）。
+    ///
+    /// # 邏輯流程
+    /// 1. 調用 `StyleLibrary::from_json(value)`：執行反序列化與初步校驗。
+    /// 2. 鏈式調用 `with_library`：完成樣式的物質化與注入。
+    ///
+    /// # 錯誤處理
+    /// 若傳入的 JSON 片段格式非法（例如非對象結構或屬性類型錯誤），將返回 `Err` 並終止初始化流程。
+    ///
+    /// # 設計意圖
+    /// 提供「零配置感」的開發體驗。開發者無需手動實例化 `StyleLibrary`，只需傳入配置文件的樣式片段即可完成裝配。
+    pub fn apply_styles(self, value: &serde_json::Value) -> Result<Self, Box<dyn Error>> {
+        // 1. 在內部利用片段構建樣式庫
+        let library = StyleLibrary::from_json(value)?;
+
+        // 2. 調用前者進行物理注入
+        Ok(self.with_library(&library))
     }
 
     /// 向樣式池中插入或更新一個自定義樣式。
@@ -161,6 +212,50 @@ impl Workbook {
         // 通過所有校驗，將任務存入隊列
         self.sheets.push(task);
         Ok(self)
+    }
+
+    /// 結合樣式工廠引擎，將 DataFrame 數據源自動著色並插入導出隊列。
+    ///
+    /// 該方法實現了「數據 + 規則 = 樣式表」的自動化流程。
+    ///
+    /// # 參數
+    /// * `df` - 待導出的 Polars DataFrame。
+    /// * `name` - 可選的工作表名稱。
+    /// * `factory` - 已配置規則的 `StyleFactory` 實例引用。
+    ///
+    /// # 邏輯流程
+    /// 1. **矩陣運算**：調用 `factory.execute(&df)`，利用向量化遮罩計算出所有命中的單元格座標與樣式標籤。
+    /// 2. **座標對齊**：得到的 `style_map` 已由工廠處理好物理偏移（Row 0 為表頭，Row 1..N 為數據）。
+    /// 3. **任務封裝**：將 `df`、名稱與產出的 `style_map` 傳遞給底層 `insert` 方法。
+    ///
+    /// # 錯誤處理
+    /// * 返回 `StyleFactoryError`：如果規則引用的列名不存在或數據類型不匹配。
+    /// * 返回 `XlsxError`：如果工作表名稱重複或數據為空。
+    pub fn insert_with_factory(self, df: DataFrame, name: Option<String>, factory: &StyleFactory) -> Result<Self, Box<dyn Error>> {
+        // 1. 執行工廠引擎：計算該 DataFrame 的物理樣式地圖
+        // 產出類型為 HashMap<(u32, u16), Arc<str>>
+        let style_map = factory.execute(&df)?;
+
+        // 2. 調用原有的成品 insert 函數
+        // 注意：這裡直接將計算好的 style_map 傳入
+        self.insert(df, name, Some(style_map))
+    }
+
+    /// 直接從 JSON 配置片段中提取規則並導出 DataFrame。
+    ///
+    /// 該方法適合「單表導出」或「配置一體化」場景，內部自動處理工廠的實例化。
+    ///
+    /// # 參數
+    /// * `df` - 數據源。
+    /// * `name` - 工作表名稱。
+    /// * `config` - 預期為包含 "rules" 鍵位的 JSON 片段（與 `StyleFactory::new` 的輸入一致）。
+    ///
+    /// # 錯誤處理
+    /// * 若 JSON 語法錯誤、規則無效或數據校驗失敗，將返回相應錯誤。
+    pub fn insert_with_config(self, df: DataFrame, name: Option<String>, config: &serde_json::Value) -> Result<Self, Box<dyn Error>> {
+        // 直接傳入引用的片段（可能是 Null），Factory 內部會自我癒合
+        let factory = StyleFactory::new(config.clone())?;
+        self.insert_with_factory(df, name, &factory)
     }
 
     /// 執行物理導出，將所有工作表寫入指定路徑。
