@@ -35,4 +35,10 @@ pub enum XlsxError {
     /// 用於捕獲 Excel 格式限制或引擎運算異常。
     #[error("Excel 導出錯誤: {0}")]
     XlsxError(#[from] rust_xlsxwriter::XlsxError),
+
+    #[error("樣式引擎錯誤: {0}")]
+    StyleError(#[from] crate::style_factory::StyleFactoryError),
+
+    #[error("合併引擎錯誤: {0}")]
+    MergeError(#[from] crate::merge_factory::MergeFactoryError),
 }

@@ -16,8 +16,7 @@ mod tests {
         )?;
 
         // 2. 定義複雜的 JSON 規則
-        let json_config = r#"{
-            "rules": [
+        let json_config = r#"[
                 {
                     "row_conditions": [{ "type": "index", "criteria": [0] }],
                     "apply": {
@@ -46,8 +45,7 @@ mod tests {
                         ]
                     }
                 }
-            ]
-        }"#;
+        ]"#;
 
         // 3. 執行工廠引擎
         let factory = StyleFactory::from_json_str(json_config)?;

@@ -7,8 +7,10 @@ pub use crate::worksheet::WorkSheet;
 // 2. 樣式工廠引擎
 pub use crate::style_factory::StyleFactory;
 pub use crate::style_factory::rules::{StyleRule, ApplyAction, StyleOverride};
-pub use crate::style_factory::condition::Condition;
+pub use crate::style_factory::condition::StyleCondition;
 pub use crate::style_library::{StyleLibrary, StyleDefinition};
+
+pub use crate::merge_factory::MergeFactory;
 
 // 3. 錯誤體系
 pub use crate::error::XlsxError;

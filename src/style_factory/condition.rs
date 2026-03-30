@@ -5,7 +5,7 @@ use serde::Deserialize;
 /// 採用 `snake_case` 命名規範（如 `value_range`），並透過 `type` 字段進行多態分發。
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum Condition {
+pub enum StyleCondition {
 
     /// 1. 物理位置定位。
     ///
@@ -72,29 +72,29 @@ pub enum Condition {
 
 }
 
-impl Condition {
+impl StyleCondition {
 
-    /// 獲取當前條件所關聯的目標列名清單。
+    /// 獲取當前條件所關聯的目標列名清單
     ///
-    /// 此方法用於在單元格級別的樣式覆蓋（`StyleOverride`）中確定塗色範圍。
+    /// 此方法用於在單元格級別的樣式覆蓋中確定塗色範圍。
     ///
-    /// # 返回值 (Returns)
-    /// * `Some(&Vec<String>)` - 對於基於內容的判斷（如 `ValueRange`, `Match` 等），返回其操作的目標列。
-    /// * `None` - 對於 `Index` 類型，由於其僅依賴物理行號定位，不具備列屬性，故返回 `None`。
+    /// # 返回值
+    /// * `Some(&Vec<String>)` - 對於基於內容的判斷條件，返回其操作的目標列
+    /// * `None` - 對於行級定位條件（`Index`, `ExcludeRows`），返回 `None`
     ///
-    /// # 設計意圖 (Design Intent)
-    /// 通過返回引用而非所有權，避免了在遍歷大量規則時產生頻繁的內存分配與字符串克隆。
+    /// # 設計考量
+    /// 通過返回引用而非所有權，避免在遍歷大量規則時產生不必要的內存分配。
     pub fn get_targets(&self) -> Option<&Vec<String>> {
         match self {
             // Index\ExcludeRows 模式僅與物理行相關，執行引擎應據此判斷是否進行整行處理
-            Condition::Index { .. } => None,
-            Condition::ExcludeRows { .. } => None,
+            StyleCondition::Index { .. } => None,
+            StyleCondition::ExcludeRows { .. } => None,
 
             // 所有基於內容的條件均指向一組具體的列
-            Condition::ValueRange { targets, .. } => Some(targets),
-            Condition::Match { targets, .. } => Some(targets),
-            Condition::Find { targets, .. } => Some(targets),
-            Condition::Equal { targets, .. } => Some(targets),
+            StyleCondition::ValueRange { targets, .. } => Some(targets),
+            StyleCondition::Match { targets, .. } => Some(targets),
+            StyleCondition::Find { targets, .. } => Some(targets),
+            StyleCondition::Equal { targets, .. } => Some(targets),
         }
     }
 

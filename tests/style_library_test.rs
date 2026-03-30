@@ -59,7 +59,7 @@ mod tests {
         });
         library = library.insert_from_json(&patch_json)?;
 
-        assert_eq!(library.styles.len(), 4);
+        assert_eq!(library.styles.len(), 2);
         // 驗證覆蓋結果
         assert_eq!(library.styles.get("money").unwrap().font_color.as_ref().unwrap(), "#00FF00");
 

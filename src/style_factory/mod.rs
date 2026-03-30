@@ -7,7 +7,7 @@ pub mod engine;
 pub mod error;
 
 // 2. 重新導出核心類型（提高外部調用的便利性）
-pub use condition::Condition;
+pub use condition::StyleCondition;
 pub use rules::{StyleRule, ApplyAction, StyleOverride};
 pub use engine::StyleFactory;
 pub use error::StyleFactoryError;
