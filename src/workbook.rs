@@ -4,16 +4,21 @@
 //! - 管理全局样式配置（样式池）
 //! - 维护工作表导出任务队列
 //! - 协调多工作表的统一导出流程
-use std::collections::HashMap;
-use std::error::Error;
+use crate::error::XlsxError;
+use crate::merge_factory::MergeFactory;
+use crate::style_factory::StyleFactory;
+use crate::style_library::StyleLibrary;
+use crate::worksheet::WorkSheet;
+use calamine::{open_workbook, Data, DataType, Reader, Xlsx};
+use chrono::NaiveDate;
 use polars::prelude::*;
 use rust_xlsxwriter::*;
-use crate::worksheet::WorkSheet;
-use crate::error::XlsxError;
+use std::collections::{HashMap};
+use std::error::Error;
 use std::fmt;
-use crate::merge_factory::MergeFactory;
-use crate::style_library::StyleLibrary;
-use crate::style_factory::StyleFactory;
+use std::io::BufReader;
+use std::path::Path;
+use crate::prelude::ReadSheet;
 
 /// Excel 工作簿导出管理器
 ///
@@ -124,6 +129,234 @@ impl Workbook {
         })
     }
 
+    /// 将DataFrame中的指定列转换为字符串类型
+    ///
+    /// 此函数用于确保某些列始终以字符串形式存储，即使它们在Excel中可能是数值类型。
+    /// 这对于处理ID号、邮政编码等需要保持前导零的字段特别有用。
+    ///
+    /// # 参数
+    /// * `df` - 需要处理的DataFrame引用
+    /// * `string_columns` - 包含需要转换为字符串的列名向量
+    ///
+    /// # 返回值
+    /// * `Result<DataFrame, XlsxError>` - 成功时返回处理后的DataFrame，失败时返回错误
+    fn sanitize_to_string_column(name: &str, data: &[AnyValue]) -> Result<Series, Box<dyn Error>> {
+        let sanitized: Vec<AnyValue> = data
+            .iter()
+            .map(|val| match val {
+                // 将数字、布尔等统统转为字符串
+                AnyValue::Float64(f) => {
+                    // 如果是整数，去掉小数点；否则保留
+                    let s = if f.fract() == 0.0 { format!("{:.0}", f) } else { f.to_string() };
+                    AnyValue::StringOwned(s.into())
+                },
+                AnyValue::Int64(i) => AnyValue::StringOwned(i.to_string().into()),
+                AnyValue::Boolean(b) => AnyValue::StringOwned(b.to_string().into()),
+                // 如果已经是字符串或 Null，保持原样
+                AnyValue::String(s) => AnyValue::StringOwned((*s).into()),
+                AnyValue::StringOwned(s) => AnyValue::StringOwned(s.clone()),
+                AnyValue::Date(d) => {
+                    // 假设你引用了 chrono，或者简单地将其转为字符串
+                    // 这里的 d 是自 1970-01-01 以来的天数
+                    AnyValue::StringOwned(format!("{}", d).into()) // 或者调用专门的日期格式化函数
+                },
+                AnyValue::Null => AnyValue::Null,
+                _ => AnyValue::StringOwned(format!("{:?}", val).into()), // 兜底处理
+            })
+            .collect();
+
+        Ok(Series::from_any_values(name.into(), &sanitized, true)?)
+    }
+
+    /// 从Excel文件中读取数据并转换为Polars DataFrame
+    ///
+    /// 此函数支持读取xlsx和xlsm格式的Excel文件，能够处理多种数据类型并提供
+    /// 灵活的列类型控制选项。自动处理日期、数值、字符串等不同类型的数据。
+    ///
+    /// # 参数
+    /// * `path` - Excel文件的完整路径
+    /// * `read_sheet` - 可选的工作表读取配置，如果为None则读取第一个可见工作表
+    ///   - `sheet_name`: 指定要读取的工作表名称
+    ///   - `force_string_cols`: 可选的列名列表，指定这些列强制作为字符串类型读取
+    ///   - `skip_rows`: 可选的行数，指定要跳过的起始行数
+    ///
+    /// # 返回值
+    /// * `Result<DataFrame, XlsxError>` - 成功时返回包含数据的DataFrame，失败时返回错误
+    fn read_xlsx(
+        excel: &mut Xlsx<BufReader<std::fs::File>>,
+        read_sheet: Option<ReadSheet>,
+    ) -> Result<DataFrame, XlsxError> {
+        // Step 1: 打开 Excel 文件
+        // let mut excel: Xlsx<_> =
+        //     open_workbook(Path::new(path)).map_err(|e| XlsxError::CalamineError(e))?;
+
+        // Step 2: 获取可用的工作表名列表
+        let sheet_names = excel.sheet_names();
+        if sheet_names.is_empty() {
+            return Err(XlsxError::NoSheetsFound);
+        }
+
+        // Step 3: 确定要使用的参数
+        let (target_sheet, skip_rows, force_string_cols) = match &read_sheet {
+            Some(sheet) => {
+                // 验证 sheet 名称是否存在
+                if !sheet_names.contains(&sheet.sheet_name) {
+                    return Err(XlsxError::SheetNotFound(sheet.sheet_name.clone()));
+                }
+
+                let skip_rows = sheet.skip_rows.unwrap_or(0);
+                let force_string_cols = sheet.force_string_cols.clone().unwrap_or_default();
+
+                (&sheet.sheet_name, skip_rows, force_string_cols)
+            }
+            None => {
+                // 使用第一个 sheet，使用默认值
+                let first_sheet = sheet_names.first().ok_or(XlsxError::NoSheetsFound)?;
+                (first_sheet, 0, Vec::new())
+            }
+        };
+
+        // Step 4: 获取指定工作表的数据范围 (Range)
+        let range = excel
+            .worksheet_range(target_sheet)
+            .map_err(|e| XlsxError::CalamineError(e))?;
+
+        // Step 5: 获取所有数据
+        let mut rows = range.rows().skip(skip_rows);
+
+        // Step 6: 提取表头并处理空值/缺失项
+        let headers: Vec<String> = {
+            let first_row = rows.next();
+            first_row
+                .ok_or(XlsxError::MissingHeaderRow)?
+                .iter()
+                .enumerate()
+                .map(|(idx, cell)| {
+                    let raw = cell.to_string();
+                    if raw.trim().is_empty() {
+                        format!("column_{}", idx)
+                    } else {
+                        raw
+                    }
+                })
+                .collect()
+        };
+
+        // Step 7: 初始化每一列的容器
+        let mut columns_data: Vec<Vec<AnyValue>> = vec![Vec::new(); headers.len()];
+
+        // Step 8: 从第二行开始遍历数据行
+        for row in rows {
+            for (col_idx, cell) in row.iter().enumerate() {
+                let value = if force_string_cols.contains(&headers[col_idx]) {
+                    AnyValue::StringOwned(cell.to_string().into())
+                } else {
+                    match cell {
+                        Data::Int(val) => AnyValue::Int64(*val),
+                        Data::Float(val) => AnyValue::Float64(*val),
+                        Data::String(val) => AnyValue::String(val),
+                        Data::Bool(val) => AnyValue::Boolean(*val),
+                        Data::Empty => AnyValue::Null,
+                        _ => {
+                            if let Some(date) = cell.as_date() {
+                                let days = (date - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
+                                AnyValue::Date(days as i32)
+                            } else {
+                                AnyValue::Null
+                            }
+                        }
+                    }
+                };
+                columns_data[col_idx].push(value);
+            }
+        }
+
+        // Step 8: 转换为 Vec<Series>
+        let series_vec: Vec<Series> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let col_name = name.as_str();
+                let data = &columns_data[i];
+
+                Series::from_any_values(col_name.into(), data, true).or_else(|_| {
+                    eprintln!("警告：列 [{col_name}] 类型不一致，已强制转为 String");
+                    Self::sanitize_to_string_column(col_name, data)
+                        .map_err(|_| XlsxError::ConversionFailed {
+                            column: col_name.to_string(),
+                        })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Step 9: 构造 DataFrame 并返回
+        let df = DataFrame::new(series_vec.len(), series_vec.into_iter().map(Column::from).collect())
+            .map_err(|e| XlsxError::ConversionFailed {
+                column: format!("构造 DataFrame 失败: {}", e),
+            })?;
+
+        Ok(df)
+    }
+
+    /// 从Excel文件读取多个工作表数据
+    ///
+    /// # 参数
+    /// * `path` - Excel文件的完整路径
+    /// * `read_sheets` - 工作表读取配置列表，如果为空则读取所有工作表
+    ///
+    /// # 返回值
+    /// 返回当前Workbook实例，便于链式调用
+    pub fn read(mut self, path: &str, read_sheets: Vec<ReadSheet>) -> Self {
+        let mut excel: Xlsx<BufReader<std::fs::File>> = match open_workbook(Path::new(path)).map_err(XlsxError::CalamineError) {
+            Ok(excel) => excel,
+            Err(e) => {
+                eprintln!("警告: 无法打开Excel文件 '{}': {}", path, e);
+                return self
+            }
+        };
+
+        let read_sheets = if read_sheets.is_empty() {
+            let sheet_names = excel.sheet_names();
+            if sheet_names.is_empty() {
+                eprintln!("警告: Excel文件中没有工作表");
+                return self;
+            }
+            sheet_names.iter().map(|name| ReadSheet::new(name.to_string())).collect()
+        }
+        else {
+            //去除可能重复的sheet_name
+            // 去除重复的sheet_name，保持原始顺序
+            let mut seen = std::collections::HashSet::new();
+            read_sheets
+                .into_iter()
+                .filter(|sheet| seen.insert(sheet.clone()))
+                .collect::<Vec<ReadSheet>>()
+        };
+
+        // sheet为空则直接返回self
+        if read_sheets.is_empty() { return self };
+
+        for sheet in &read_sheets {
+            match Self::read_xlsx(&mut excel, Some(sheet.clone())) {
+                Ok(df) => {
+                    let worksheet = match WorkSheet::new(df, sheet.sheet_name.clone(), None, None) {
+                        Ok(worksheet) => worksheet,
+                        Err(e) => {
+                            eprintln!("创建工作表 '{}' 失败: {}", sheet.sheet_name, e);
+                            continue;
+                        }
+                    };
+                    self.sheets.push(worksheet);
+                }
+                Err(e) => {
+                    eprintln!("读取sheet '{}' 失败: {}", sheet.sheet_name, e);
+                    continue;
+                }
+            }
+        }
+        self
+    }
+
     /// 注册或更新工作簿中的样式定义
     ///
     /// 构建器模式方法，用于向工作簿的样式池中添加新的样式定义
@@ -193,7 +426,7 @@ impl Workbook {
     ///   },
     /// }
     /// ```
-    pub fn apply_styles(self, value: &serde_json::Value) -> Result<Self, Box<dyn Error>> {
+    pub fn with_library_from_json(self, value: &serde_json::Value) -> Result<Self, Box<dyn Error>> {
         // 1. 在內部利用片段構建樣式庫
         // 通过 JSON 配置创建样式库实例
         // 此步骤会进行配置解析和验证
@@ -234,11 +467,9 @@ impl Workbook {
                   merge_ranges: Option<Vec<(u32, u16, u32, u16)>>
     ) -> Result<Self, Box<dyn Error>> {
         // 1. 定義輔助閉包：封裝默認命名邏輯，確保命名的一致性與唯一性起點
-        // 闭包提供统一的默认命名规则，避免代码重复
         let get_default_name = |sheets_len: usize| format!("Sheet {}", sheets_len + 1);
 
         // 2. 初步確定名稱：優先使用用戶提供，否則生成默認名
-        // 支持用户自定义名称，提高灵活性
         let final_name = name.unwrap_or_else(|| get_default_name(self.sheets.len()));
 
         // 3. 嘗試構建 WorkSheet 任務：
@@ -264,14 +495,12 @@ impl Workbook {
 
         // 4. 名稱重複檢查：
         // Excel 不允許同名工作表。這是全局級別的衝突，必須由 Workbook 攔截。
-        // 确保 Excel 文件的结构完整性
         if self.sheets.iter().any(|s| s.name == task.name) {
             return Err(Box::new(XlsxError::DuplicateName(task.name)));
         }
 
         // 5. 樣式名存在性檢查：
         // 確保數據在寫入時能找到對應的格式定義，防止 save 時出現懸空引用。
-        // 预先验证样式引用的有效性，避免运行时错误
         if let Some(ref map) = task.style_map {
             for style_name in map.values() {
                 if !self.styles.contains_key(style_name.as_ref()) {
@@ -281,7 +510,6 @@ impl Workbook {
         }
 
         // 通過所有校驗，將任務存入隊列
-        // 所有权转移完成，任务正式加入工作簿
         self.sheets.push(task);
         Ok(self)
     }

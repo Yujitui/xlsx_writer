@@ -6,6 +6,25 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum XlsxError {
 
+    /// Excel 文件为空或不含任何工作表
+    #[error("Excel 文件未包含任何工作表")]
+    NoSheetsFound,
+
+    /// 指定的工作表不存在
+    #[error("找不到名为 '{0}' 的工作表")]
+    SheetNotFound(String),
+
+    /// 无法读取标题行（通常是第一行缺失或为空）
+    #[error("无法提取标题行，可能是由于表格为空或首行为全空")]
+    MissingHeaderRow,
+
+    #[error("列 '{column}' 类型转换失败，即使已尝试转为 String")]
+    ConversionFailed { column: String },
+
+    /// 文件本身存在问题（如加密、损坏）
+    #[error("Excel 解析错误: {0}")]
+    CalamineError(#[from] calamine::XlsxError),
+
     /// 當傳入的 Polars DataFrame 沒有任何行或列時觸發。
     #[error("DataFrame 內容為空，無法導出")]
     EmptyDataFrame,

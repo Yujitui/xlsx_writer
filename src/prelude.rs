@@ -3,6 +3,7 @@
 // 1. 核心數據結構
 pub use crate::workbook::Workbook;
 pub use crate::worksheet::WorkSheet;
+pub use crate::readsheet::ReadSheet;
 
 // 2. 樣式工廠引擎
 pub use crate::style_factory::StyleFactory;
