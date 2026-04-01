@@ -66,6 +66,20 @@ impl Workbook {
         self.sheets.get(index).map(|sheet| sheet.name.as_str())
     }
 
+    /// 通过工作表名称查找工作表
+    ///
+    /// 根据指定的名称在工作簿中查找对应的工作表。
+    ///
+    /// # 参数
+    /// * `name` - 要查找的工作表名称
+    ///
+    /// # 返回值
+    /// * `Some(&WorkSheet)` - 找到匹配的工作表，返回其引用
+    /// * `None` - 未找到指定名称的工作表
+    pub fn get_sheet_by_name(&self, name: &str) -> Option<&WorkSheet> {
+        self.sheets.iter().find(|sheet| sheet.name == name)
+    }
+
     /// 按索引获取工作表的样式映射（简化版）
     ///
     /// 返回样式映射的直接引用，如果工作表不存在则返回 None。
