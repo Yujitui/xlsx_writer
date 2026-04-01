@@ -304,7 +304,7 @@ impl Workbook {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Step 9: 构造 DataFrame 并返回
-        let df = DataFrame::new(series_vec.len(), series_vec.into_iter().map(Column::from).collect())
+        let df = DataFrame::new(series_vec[0].len(), series_vec.into_iter().map(Column::from).collect())
             .map_err(|e| XlsxError::ConversionFailed {
                 column: format!("构造 DataFrame 失败: {}", e),
             })?;
