@@ -5,7 +5,7 @@ pub use crate::workbook::Workbook;
 pub use crate::worksheet::WorkSheet;
 pub use crate::readsheet::ReadSheet;
 
-pub use crate::xls_reader::XlsReader;
+pub use crate::xls::XlsWorkbook;
 
 // 2. 樣式工廠引擎
 pub use crate::style_factory::StyleFactory;
