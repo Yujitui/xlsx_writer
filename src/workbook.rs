@@ -360,7 +360,13 @@ impl Workbook {
                             continue;
                         }
                     };
-                    self.sheets.push(worksheet);
+                    if let None = self.get_sheet_by_name(worksheet.name.as_str()) {
+                        self.sheets.push(worksheet);
+                    }
+                    else {
+                        eprintln!("sheet '{}' 与现有表格重复", sheet.sheet_name);
+                        continue;
+                    }
                 }
                 Err(e) => {
                     eprintln!("读取sheet '{}' 失败: {}", sheet.sheet_name, e);
