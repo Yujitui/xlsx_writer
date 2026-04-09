@@ -1,3 +1,7 @@
+//! 工作簿记录模块
+//!
+//! 包含BIFF格式中工作簿(Workbook)相关的所有记录类型
+
 pub mod backup_record;
 pub mod book_bool_record;
 pub mod boundsheet_record;

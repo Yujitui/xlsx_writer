@@ -1,5 +1,24 @@
 use super::BiffRecord;
 
+/// 对齐方式结构体
+///
+/// ## 作用
+///
+/// 定义单元格文本的对齐方式，包括水平对齐、垂直对齐、自动换行等。
+///
+/// ## 参数说明
+///
+/// - `horz`: 水平对齐方式
+///   - 0 = 常规, 1 = 左对齐, 2 = 居中, 3 = 右对齐
+///   - 4 = 填充, 5 = 两端对齐, 6 = 跨列居中, 7 = 分散对齐
+/// - `vert`: 垂直对齐方式
+///   - 0 = 靠上, 1 = 居中, 2 = 靠下, 3 = 两端对齐, 4 = 分散对齐
+/// - `wrap`: 自动换行（0=不换行, 1=换行）
+/// - `rota`: 旋转角度（0-90度, 255=堆叠文字）
+/// - `inde`: 缩进级别（0-15）
+/// - `shri`: 缩小填充（0=否, 1=是）
+/// - `merg`: 合并单元格（0=否, 1=是）
+/// - `dire`: 文字方向（0=根据上下文, 1=从左到右, 2=从右到左）
 #[derive(Debug, Clone)]
 pub struct Alignment {
     pub horz: u8, // 0=general, 1=left, 2=center, 3=right, 4=fill, 5=justify, 6=center_across, 7=distributed
@@ -27,6 +46,19 @@ impl Default for Alignment {
     }
 }
 
+/// 边框结构体
+///
+/// ## 作用
+///
+/// 定义单元格的边框样式，包括边框线类型和颜色。
+///
+/// ## 参数说明
+///
+/// - `left`, `right`, `top`, `bottom`, `diag`: 边框线类型
+///   - 0 = 无, 1 = 细, 2 = 中, 3 = 虚线, 4 = 点虚线, 5 = 粗
+///   - 6 = 双线, 7 = hair, 8-13 = 特定样式
+/// - `left_colour`, `right_colour`, `top_colour`, `bottom_colour`, `diag_colour`: 边框颜色索引
+/// - `need_diag1`, `need_diag2`: 是否显示对角线（0=否, 1=是）
 #[derive(Debug, Clone)]
 pub struct Borders {
     pub left: u8,
@@ -62,6 +94,21 @@ impl Default for Borders {
     }
 }
 
+/// 填充图案结构体
+///
+/// ## 作用
+///
+/// 定义单元格的背景填充图案和颜色。
+///
+/// ## 参数说明
+///
+/// - `pattern`: 图案样式（0=无, 1=实色, 2=50%灰色, 3=75%灰色, 4=25%灰色,
+///   5=横条纹, 6=竖条纹, 7=反向对角条纹, 8=对角条纹, 9= thick diagonal crosshatch,
+///   10=thin horizontal stripe, 11=thin vertical stripe, 12=thin reverse diagonal stripe,
+///   13=thin diagonal stripe, 14=thin diagonal crosshatch, 15=thick horizontal crosshatch,
+///   16=thick vertical crosshatch, 17=thick reverse diagonal crosshatch, 18=thick diagonal crosshatch）
+/// - `pattern_fore_colour`: 前景色索引
+/// - `pattern_back_colour`: 背景色索引
 #[derive(Debug, Clone)]
 pub struct Pattern {
     pub pattern: u8,
@@ -79,6 +126,16 @@ impl Default for Pattern {
     }
 }
 
+/// 保护结构体
+///
+/// ## 作用
+///
+/// 定义单元格的锁定和公式隐藏状态。
+///
+/// ## 参数说明
+///
+/// - `cell_locked`: 单元格锁定（0=未锁定, 1=锁定）
+/// - `formula_hidden`: 公式隐藏（0=显示公式, 1=隐藏公式）
 #[derive(Debug, Clone)]
 pub struct Protection {
     pub cell_locked: u8,
@@ -94,6 +151,21 @@ impl Default for Protection {
     }
 }
 
+/// XF (扩展格式) 结构体
+///
+/// ## 作用
+///
+/// XF结构体是Excel单元格格式的核心，包含了单元格的所有样式信息：
+/// 字体、边框、填充图案、保护设置等。每个XF通过索引被单元格引用。
+///
+/// ## 参数说明
+///
+/// - `font_idx`: 字体索引（指向FontRecord）
+/// - `format_idx`: 数字格式索引（指向NumberFormatRecord，164及以下为内置格式）
+/// - `alignment`: 对齐方式
+/// - `borders`: 边框样式
+/// - `pattern`: 填充图案
+/// - `protection`: 保护设置
 #[derive(Debug, Clone)]
 pub struct XF {
     pub font_idx: u16,
@@ -117,12 +189,33 @@ impl Default for XF {
     }
 }
 
+/// XF类型枚举
+///
+/// ## 作用
+///
+/// 区分单元格XF和样式XF。
+///
+/// ## 参数说明
+///
+/// - `Cell`: 单元格格式XF
+/// - `Style`: 样式XF（用于内置样式定义）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XFType {
     Cell,
     Style,
 }
 
+/// XFRecord 记录
+///
+/// 作用：存储扩展格式（XF）定义
+///
+/// XFRecord是Excel BIFF格式中的扩展格式记录（ID: 0x00E0），用于存储单元格或样式的格式信息。
+/// 每个XFRecord包含一个XF结构体，定义了完整的单元格格式属性。
+///
+/// ## 参数说明
+///
+/// - `xf`: XF结构体，包含所有格式属性
+/// - `xf_type`: XF类型（单元格格式或样式格式）
 pub struct XFRecord {
     xf: XF,
     xf_type: XFType,

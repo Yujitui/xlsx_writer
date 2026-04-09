@@ -1,5 +1,17 @@
 use super::BiffRecord;
 
+/// DateModeRecord 记录
+///
+/// 作用：定义工作簿的日期系统
+///
+/// DateModeRecord是Excel BIFF格式中的日期模式记录（ID: 0x0022），用于定义
+/// 工作簿中日期值所使用的时间系统（1900或1904）。
+///
+/// ## 参数说明
+///
+/// - `from_1904`: 日期系统选择
+///   - false = 1900日期系统（默认，Excel默认）
+///   - true = 1904日期系统（Macintosh Excel早期版本）
 #[derive(Debug)]
 pub struct DateModeRecord {
     from_1904: bool,

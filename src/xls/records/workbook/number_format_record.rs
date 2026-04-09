@@ -1,6 +1,20 @@
 use super::encode_biff_string_v2;
 use super::BiffRecord;
 
+/// NumberFormatRecord 记录
+///
+/// 作用：定义数字格式样式
+///
+/// NumberFormatRecord是Excel BIFF格式中的数字格式记录（ID: 0x041E），
+/// 用于定义自定义数字格式（如"#,##0.00"或"yyyy-mm-dd"）。
+///
+/// ## 参数说明
+///
+/// - `format_index`: 格式索引
+///   - 0-163: 内置格式索引
+///   - 164+: 自定义格式索引
+/// - `format_string`: 格式字符串
+///   - 如 "0.00", "yyyy-mm-dd", "$#,##0.00" 等
 #[derive(Debug)]
 pub struct NumberFormatRecord {
     format_index: u16,

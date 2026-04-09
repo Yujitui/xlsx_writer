@@ -1,5 +1,20 @@
 use super::BiffRecord;
 
+/// CountryRecord 记录
+///
+/// 作用：定义工作簿的国家/地区设置
+///
+/// CountryRecord是Excel BIFF格式中的国家记录（ID: 0x008C），用于定义
+/// 工作簿使用的语言和国家/地区设置，用于日期和货币格式等。
+///
+/// ## 参数说明
+///
+/// - `ui_id`: 用户界面语言ID
+///   - 1 = 英语（美国）
+///   - 31 = 简体中文
+///   - 1028 = 繁体中文
+/// - `sys_settings_id`: 系统设置语言ID
+///   - 默认值为 1（美国）
 #[derive(Debug)]
 pub struct CountryRecord {
     ui_id: u16,

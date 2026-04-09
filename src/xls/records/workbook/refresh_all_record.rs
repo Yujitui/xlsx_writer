@@ -1,5 +1,15 @@
 use super::BiffRecord;
 
+/// RefreshAllRecord 记录
+///
+/// 作用：控制是否刷新所有数据透视表
+///
+/// RefreshAllRecord是Excel BIFF格式中的刷新全部记录（ID: 0x01B7），用于
+/// 指示Excel在打开文件时是否自动刷新所有数据透视表和外部数据连接。
+///
+/// ## 参数说明
+///
+/// - 固定值：0x0000（不自动刷新）
 #[derive(Debug)]
 pub struct RefreshAllRecord;
 

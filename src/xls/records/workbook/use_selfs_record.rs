@@ -1,5 +1,15 @@
 use super::BiffRecord;
 
+/// UseSelfsRecord 记录
+///
+/// 作用：指定使用自身引用样式
+///
+/// UseSelfsRecord是Excel BIFF格式中的使用自身引用记录（ID: 0x0160），
+/// 指示公式使用自身引用（R1C1样式）还是相对自身引用。此记录已弃用。
+///
+/// ## 参数说明
+///
+/// - 固定值：0x0001（使用!操作符解析自身引用）
 #[derive(Debug)]
 pub struct UseSelfsRecord;
 

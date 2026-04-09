@@ -1,6 +1,33 @@
 use super::encode_biff_string_v1;
 use super::BiffRecord;
 
+/// 字体结构体，定义字体的各种属性
+///
+/// ## 作用
+///
+/// Font结构体定义了Excel中使用的字体属性，包括字体名称、大小、颜色、粗体、斜体、下划线等。
+/// 这些属性通过FontRecord记录存储在工作簿中，每个工作簿最多可以有4个字体（Excel BIFF8限制）。
+///
+/// ## 参数说明
+///
+/// - `height`: 字体高度（单位：1/20点）
+/// - `options`: 字体选项标志位
+///   - bit 0 (0x0001): 粗体
+///   - bit 1 (0x0002): 斜体
+///   - bit 2 (0x0004): 下划线
+///   - bit 3 (0x0008): 删除线
+/// - `colour_index`: 颜色索引（0x7FFF为自动颜色）
+/// - `weight`: 字重（0x0190=常规, 0x02BC=粗体）
+/// - `escapement`: 上标/下标（0x0000=普通, 0x0001=上标, 0x0002=下标）
+/// - `underline`: 下划线样式
+///   - 0x00: 无下划线
+///   - 0x01: 单下划线
+///   - 0x02: 双下划线
+///   - 0x21: 会计单下划线
+///   - 0x22: 会计双下划线
+/// - `family`: 字体族（0x00=不需要, 0x01=衬线, 0x02=无衬线, 0x03=手写体, 0x04=等宽）
+/// - `charset`: 字符集（0x01=Latin1, 0x00=ANSI）
+/// - `name`: 字体名称
 #[derive(Debug, Clone)]
 pub struct Font {
     pub height: u16,
@@ -63,6 +90,12 @@ impl Default for Font {
     }
 }
 
+/// FontRecord 记录
+///
+/// 作用：存储字体定义信息
+///
+/// FontRecord是Excel BIFF格式中的字体记录（ID: 0x0031），用于在工作簿中定义字体样式。
+/// 每个FontRecord包含一个Font结构体，定义了字体的完整属性。
 pub struct FontRecord {
     font: Font,
 }

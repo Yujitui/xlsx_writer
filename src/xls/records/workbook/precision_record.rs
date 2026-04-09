@@ -1,5 +1,17 @@
 use super::BiffRecord;
 
+/// PrecisionRecord 记录
+///
+/// 作用：控制数值精度显示
+///
+/// PrecisionRecord是Excel BIFF格式中的精度记录（ID: 0x000E），用于定义
+/// 工作簿中数值显示的精度（按显示值计算还是按存储值计算）。
+///
+/// ## 参数说明
+///
+/// - `use_real_values`: 精度选项
+///   - true = 按照显示的精度计算公式结果（默认）
+///   - false = 按照存储的完整精度计算
 #[derive(Debug)]
 pub struct PrecisionRecord {
     use_real_values: bool,

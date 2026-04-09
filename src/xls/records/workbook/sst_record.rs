@@ -2,10 +2,15 @@ use super::encode_biff_string_v2;
 use super::BiffRecord;
 use std::collections::HashMap;
 
+/// SST记录的记录ID
 const SST_RECORD_ID: u16 = 0x00FC;
+/// CONTINUE记录的记录ID
 const CONTINUE_RECORD_ID: u16 = 0x003C;
+/// BIFF记录的最大数据大小
 const MAX_RECORD_DATA_SIZE: usize = 8224;
 
+/// 共享字符串表 (Shared String Table)
+/// 存储工作簿中所有唯一的字符串，用于LabelSSTRecord引用
 #[derive(Debug)]
 pub struct SharedStringTable {
     strings: Vec<String>,

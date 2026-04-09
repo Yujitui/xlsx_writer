@@ -1,5 +1,23 @@
 use super::BiffRecord;
 
+/// Window1Record 记录
+///
+/// 作用：定义工作簿窗口的布局
+///
+/// Window1Record是Excel BIFF格式中的窗口记录（ID: 0x003D），用于定义
+/// 工作簿窗口的位置、大小和显示选项。
+///
+/// ## 参数说明
+///
+/// - `hpos_twips`: 窗口水平位置（单位：twips，1/1440英寸）
+/// - `vpos_twips`: 窗口垂直位置（单位：twips）
+/// - `width_twips`: 窗口宽度（单位：twips）
+/// - `height_twips`: 窗口高度（单位：twips）
+/// - `flags`: 窗口选项标志
+/// - `active_sheet`: 当前活动工作表索引
+/// - `first_tab_index`: 第一个显示的工作表标签索引
+/// - `selected_tabs`: 选中的工作表标签数量
+/// - `tab_width`: 工作表标签栏宽度
 #[derive(Debug)]
 pub struct Window1Record {
     hpos_twips: u16,

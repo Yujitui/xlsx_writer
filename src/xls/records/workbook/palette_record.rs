@@ -10,6 +10,19 @@ const DEFAULT_PALETTE: [u32; 56] = [
     0x00336600, 0x33996600, 0x00330000, 0x33330000, 0x99330000, 0x99336600, 0x33339900, 0x33333300,
 ];
 
+/// PaletteRecord 记录
+///
+/// 作用：定义工作簿的自定义调色板
+///
+/// PaletteRecord是Excel BIFF格式中的调色板记录（ID: 0x0092），用于定义
+/// 工作簿中使用的自定义颜色。Excel默认提供56种颜色，此记录允许修改部分颜色。
+///
+/// ## 参数说明
+///
+/// - `modifications`: 颜色修改向量
+///   - 每个元素为 (palette_index, red, green, blue)
+///   - palette_index: 调色板索引 (0-55)
+///   - red, green, blue: RGB值 (0-255)
 #[derive(Debug)]
 pub struct PaletteRecord {
     colors: Vec<u32>,

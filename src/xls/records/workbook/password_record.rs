@@ -71,3 +71,45 @@ impl fmt::Display for PasswordRecord {
         write!(f, "PasswordHash({:04X})", self.password_hash)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_password_record_id() {
+        let record = PasswordRecord::new("test");
+        assert_eq!(record.id(), 0x0013);
+    }
+
+    #[test]
+    fn test_password_record_default() {
+        let record = PasswordRecord::default();
+        assert_eq!(record.password_hash, 0);
+    }
+
+    #[test]
+    fn test_password_record_data_size() {
+        let record = PasswordRecord::new("test");
+        assert_eq!(record.data().len(), 2);
+    }
+
+    #[test]
+    fn test_password_record_empty() {
+        let record = PasswordRecord::empty();
+        assert_eq!(record.password_hash, 0);
+    }
+
+    #[test]
+    fn test_password_hash() {
+        let record = PasswordRecord::new("test");
+        assert_ne!(record.password_hash, 0);
+    }
+
+    #[test]
+    fn test_password_verify() {
+        let record = PasswordRecord::new("secret");
+        assert!(record.verify_password("secret"));
+        assert!(!record.verify_password("wrong"));
+    }
+}

@@ -1,6 +1,19 @@
 use super::encode_biff_string_v1;
 use super::BiffRecord;
 
+/// BoundSheetRecord 记录
+///
+/// 作用：定义工作簿中工作表的信息
+///
+/// BoundSheetRecord是Excel BIFF格式中的工作表信息记录（ID: 0x0085），用于
+/// 定义每个工作表的名称、类型、可见性和在文件流中的位置。
+///
+/// ## 参数说明
+///
+/// - `stream_pos`: 工作表数据在文件流中的位置偏移
+/// - `visibility`: 可见性（见SheetVisibility枚举）
+/// - `sheet_type`: 工作表类型（见SheetType枚举）
+/// - `sheet_name`: 工作表名称
 #[derive(Debug)]
 pub struct BoundSheetRecord {
     stream_pos: u32,

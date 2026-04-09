@@ -1,5 +1,11 @@
 use super::BiffRecord;
 
+/// StyleRecord 记录
+///
+/// 作用：定义用户定义的样式
+///
+/// StyleRecord是Excel BIFF格式中的样式记录（ID: 0x0293），用于定义
+/// 用户创建的命名样式。此记录已较少使用。
 #[derive(Debug, Default)]
 pub struct StyleRecord;
 

@@ -1,5 +1,11 @@
 use super::BiffRecord;
 
+/// EOF (End of File) 记录
+///
+/// ## 作用
+///
+/// 标识BIFF段落的结束。每个BIFF段（如工作簿globals或worksheet）结束时需要此记录。
+/// EOF记录没有数据部分，data()返回空向量。
 #[derive(Debug, Default)]
 pub struct EofRecord;
 
