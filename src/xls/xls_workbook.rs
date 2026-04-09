@@ -1125,6 +1125,7 @@ mod tests {
     fn test_write_xls_stream_debug() -> Result<(), XlsError> {
         let input_path = "data/工作簿1.xls";       // 原始输入文件路径
         let temp_output_path = "data/工作簿1_temp.xls"; // 输出中间文件路
+        let example_path = "data/example.xls";
 
         let workbook = XlsWorkbook::new();
         let parsed_workbook = workbook.read_xls(input_path)?;
@@ -1132,7 +1133,7 @@ mod tests {
         // 写入完整文件
         parsed_workbook.write_xls(temp_output_path)?;
 
-        let result = _dump_xls_records(input_path);
+        let result = _dump_xls_records(example_path);
         if let Err(e) = result {
             println!("分析文件时出错: {}", e);
         }
