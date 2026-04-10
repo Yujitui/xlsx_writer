@@ -92,6 +92,89 @@ impl BiffRecord for BoundSheetRecord {
     }
 }
 
+// ============================================================================
+// ParsableRecord implementation for reading
+// ============================================================================
+
+use crate::xls::records::{ParsableRecord, ParseState};
+use crate::xls::XlsError;
+
+impl ParsableRecord for BoundSheetRecord {
+    const RECORD_ID: u16 = 0x0085;
+
+    fn parse(data: &[u8]) -> Result<Self, XlsError> {
+        if data.len() < 6 {
+            return Err(XlsError::InvalidFormat(format!(
+                "BoundSheetRecord data too short: {} bytes",
+                data.len()
+            )));
+        }
+
+        let stream_pos = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let visibility = data[4];
+        let sheet_type = data[5];
+
+        // 解析工作表名称（使用 upack1 格式：1字节长度 + 1字节标志 + 数据）
+        let mut offset = 6;
+
+        if offset >= data.len() {
+            return Err(XlsError::InvalidFormat(
+                "BoundSheetRecord name length missing".to_string(),
+            ));
+        }
+
+        let name_len = data[offset] as usize;
+        offset += 1;
+
+        if offset >= data.len() {
+            return Err(XlsError::InvalidFormat(
+                "BoundSheetRecord name flag missing".to_string(),
+            ));
+        }
+
+        let flag = data[offset];
+        let is_utf16 = (flag & 0x01) != 0;
+        offset += 1;
+
+        let sheet_name = if is_utf16 {
+            // UTF-16LE 解码
+            if offset + name_len * 2 > data.len() {
+                return Err(XlsError::InvalidFormat(
+                    "BoundSheetRecord name data incomplete".to_string(),
+                ));
+            }
+            let utf16_data = &data[offset..offset + name_len * 2];
+            let u16_vec: Vec<u16> = utf16_data
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect();
+            String::from_utf16(&u16_vec)
+                .unwrap_or_else(|_| String::from_utf8_lossy(utf16_data).to_string())
+        } else {
+            // ASCII/Latin-1 解码
+            if offset + name_len > data.len() {
+                return Err(XlsError::InvalidFormat(
+                    "BoundSheetRecord name data incomplete".to_string(),
+                ));
+            }
+            String::from_utf8_lossy(&data[offset..offset + name_len]).to_string()
+        };
+
+        Ok(BoundSheetRecord {
+            stream_pos,
+            visibility,
+            sheet_type,
+            sheet_name,
+        })
+    }
+
+    fn apply(&self, state: &mut ParseState) -> Result<(), XlsError> {
+        // 将工作表名称添加到列表
+        state.sheet_names.push(self.sheet_name.clone());
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

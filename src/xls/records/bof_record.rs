@@ -1,4 +1,5 @@
 use crate::xls::records::BiffRecord;
+use crate::xls::XlsSheet;
 
 /// BOF记录类型
 ///
@@ -74,6 +75,59 @@ impl BiffRecord for BoFRecord {
         buf.extend_from_slice(&0x00u8.to_le_bytes()); // Flags
         buf.extend_from_slice(&0x06u8.to_le_bytes()); // VerCanRead
         buf
+    }
+}
+
+// ============================================================================
+// ParsableRecord implementation for reading
+// ============================================================================
+
+use crate::xls::records::{ParsableRecord, ParseState};
+use crate::xls::XlsError;
+
+impl ParsableRecord for BoFRecord {
+    const RECORD_ID: u16 = 0x0809;
+
+    fn parse(data: &[u8]) -> Result<Self, XlsError> {
+        if data.len() < 4 {
+            return Err(XlsError::InvalidFormat("BOF data too short".to_string()));
+        }
+        let bof_type_val = u16::from_le_bytes([data[2], data[3]]);
+        let bof_type = match bof_type_val {
+            0x0005 => BofType::WorkbookGlobals,
+            0x0010 => BofType::Worksheet,
+            0x0020 => BofType::Chart,
+            0x0040 => BofType::MacroSheet,
+            0x0100 => BofType::Workspace,
+            _ => BofType::WorkbookGlobals, // Default
+        };
+        Ok(BoFRecord::new(bof_type))
+    }
+
+    fn apply(&self, state: &mut ParseState) -> Result<(), XlsError> {
+        // 完成之前的 SST
+        if let Some(parser) = state.sst_parser.take() {
+            if let Err(e) = parser.finish(&mut state.sst) {
+                eprintln!("Warning: Failed to finish SST on BOF: {}", e);
+            }
+        }
+
+        match self.bof_type {
+            BofType::Worksheet => {
+                if let Some(sheet) = state.current_sheet.take() {
+                    state.sheets.push(sheet);
+                }
+                let idx = state.sheets.len();
+                let name = state
+                    .sheet_names
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Sheet{}", idx + 1));
+                state.current_sheet = Some(XlsSheet::new(name));
+            }
+            _ => {} // WorkbookGlobals 等忽略
+        }
+        Ok(())
     }
 }
 

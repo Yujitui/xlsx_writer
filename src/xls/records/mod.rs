@@ -16,6 +16,7 @@ pub mod worksheet;
 pub mod biff_record;
 pub mod bof_record;
 pub mod eof_record;
+pub mod parseable;
 pub mod utils;
 
 pub use utils::{encode_biff_string_v1, encode_biff_string_v2};
@@ -23,6 +24,7 @@ pub use utils::{encode_biff_string_v1, encode_biff_string_v2};
 pub use biff_record::BiffRecord;
 pub use bof_record::{BoFRecord, BofType};
 pub use eof_record::EofRecord;
+pub use parseable::{decode_rk_value, ParsableRecord, ParseState, SSTParserState};
 
 pub use workbook::{
     backup_record::BackupRecord,
@@ -47,7 +49,7 @@ pub use workbook::{
     prot_4_rev_record::Prot4RevRecord,
     protect_record::ProtectRecord,
     refresh_all_record::RefreshAllRecord,
-    sst_record::{SSTRecord, SharedStringTable},
+    sst_record::{ContinueRecord, SSTRecord, SSTRecordData, SharedStringTable},
     style_record::StyleRecord,
     tab_id_record::TabIDRecord,
     use_selfs_record::UseSelfsRecord,
@@ -63,8 +65,8 @@ pub use worksheet::{
     calc_count_record::CalcCountRecord,
     calc_mode_record::CalcModeRecord,
     cell_records::{
-        row_data_to_cell_records, BlankRecord, BoolErrRecord, LabelSSTRecord, MulBlankRecord,
-        MulRkRecord, NumberRecord, RKRecord,
+        row_data_to_cell_records, BlankRecord, BoolErrRecord, FormulaRecord, LabelSSTRecord,
+        MulBlankRecord, MulRkRecord, NumberRecord, RKRecord,
     },
     default_row_height_record::DefaultRowHeightRecord,
     delta_record::DeltaRecord,

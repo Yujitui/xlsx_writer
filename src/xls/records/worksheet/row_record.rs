@@ -1,5 +1,5 @@
-use crate::xls::records::BiffRecord;
-use crate::xls::XlsCell;
+use crate::xls::records::{BiffRecord, ParsableRecord, ParseState};
+use crate::xls::{XlsCell, XlsError};
 
 /// RowRecord 记录
 ///
@@ -140,5 +140,67 @@ mod tests {
 
         let serialized = record.serialize();
         assert!(!serialized.is_empty());
+    }
+}
+
+// ============================================================================
+// ParsableRecord implementation for reading
+// ============================================================================
+
+impl ParsableRecord for RowRecord {
+    const RECORD_ID: u16 = 0x0208;
+
+    fn parse(data: &[u8]) -> Result<Self, XlsError> {
+        if data.len() < 16 {
+            return Err(XlsError::InvalidFormat(format!(
+                "RowRecord data too short: {} bytes",
+                data.len()
+            )));
+        }
+
+        let index = u16::from_le_bytes([data[0], data[1]]);
+        let first_col = u16::from_le_bytes([data[2], data[3]]);
+        let last_col = u16::from_le_bytes([data[4], data[5]]);
+        let height_options = u16::from_le_bytes([data[6], data[7]]);
+        let options = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+
+        Ok(RowRecord {
+            index,
+            first_col,
+            last_col,
+            height_options,
+            options,
+        })
+    }
+
+    fn apply(&self, state: &mut ParseState) -> Result<(), XlsError> {
+        // RowRecord 仅提供行属性信息，不直接修改单元格数据
+        // 可以选择性地记录行高、格式等信息
+        let _ = (state, self); // 抑制未使用警告
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod parsable_tests {
+    use super::*;
+
+    #[test]
+    fn test_row_record_parse() {
+        // RowRecord: index=5, first_col=0, last_col=10, height_options=0x00FF, options=0x000F0100
+        let data = [
+            0x05, 0x00, // index = 5
+            0x00, 0x00, // first_col = 0
+            0x0A, 0x00, // last_col = 10
+            0xFF, 0x00, // height_options = 0x00FF
+            0x00, 0x00, // reserved
+            0x00, 0x01, // reserved
+            0x00, 0x01, 0x0F, 0x00, // options = 0x000F0100
+        ];
+
+        let record = RowRecord::parse(&data).unwrap();
+        assert_eq!(record.index, 5);
+        assert_eq!(record.first_col, 0);
+        assert_eq!(record.last_col, 10);
     }
 }

@@ -113,6 +113,64 @@ impl BiffRecord for DimensionsRecord {
     }
 }
 
+// ============================================================================
+// ParsableRecord implementation for reading
+// ============================================================================
+
+use crate::xls::records::{ParsableRecord, ParseState};
+use crate::xls::XlsError;
+
+impl ParsableRecord for DimensionsRecord {
+    const RECORD_ID: u16 = 0x0200;
+
+    fn parse(data: &[u8]) -> Result<Self, XlsError> {
+        if data.len() < 14 {
+            return Err(XlsError::InvalidFormat(format!(
+                "DimensionsRecord data too short: {} bytes",
+                data.len()
+            )));
+        }
+
+        let first_used_row = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let last_used_row = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let first_used_col = u16::from_le_bytes([data[8], data[9]]);
+        let last_used_col = u16::from_le_bytes([data[10], data[11]]);
+
+        Ok(DimensionsRecord {
+            first_used_row,
+            last_used_row,
+            first_used_col,
+            last_used_col,
+        })
+    }
+
+    fn apply(&self, state: &mut ParseState) -> Result<(), XlsError> {
+        let sheet = state.current_sheet_mut()?;
+
+        // 预分配行空间
+        // 注意：last_used_row 存储的是 "最后一个使用的行 + 1"
+        let num_rows = if self.last_used_row > self.first_used_row {
+            (self.last_used_row - self.first_used_row) as usize
+        } else {
+            0
+        };
+
+        // 预分配列空间
+        let num_cols = if self.last_used_col > self.first_used_col {
+            (self.last_used_col - self.first_used_col) as usize
+        } else {
+            0
+        };
+
+        // 预分配行
+        for _ in 0..num_rows {
+            sheet.rows.push(vec![None; num_cols]);
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
