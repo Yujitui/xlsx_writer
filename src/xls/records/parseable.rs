@@ -230,6 +230,8 @@ pub struct ParseState {
     pub sst_parser: Option<SSTParserState>,
     /// 标记解析是否完成
     pub is_complete: bool,
+    /// 上一个字符串结果公式的行列位置（等待 STRING 记录）
+    pub last_formula_string_cell: Option<(u16, u16)>,
 }
 
 impl ParseState {
@@ -242,6 +244,7 @@ impl ParseState {
             sheet_names: Vec::new(),
             sst_parser: None,
             is_complete: false,
+            last_formula_string_cell: None,
         }
     }
 

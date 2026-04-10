@@ -406,7 +406,7 @@ impl XlsWorkbook {
             BlankRecord, BoFRecord, BoolErrRecord, BoundSheetRecord, ContinueRecord,
             DimensionsRecord, EofRecord, FormulaRecord, LabelSSTRecord, MulBlankRecord,
             MulRkRecord, NumberRecord, ParsableRecord, ParseState, RKRecord, RowRecord,
-            SSTRecordData,
+            SSTRecordData, StringRecord,
         };
         use byteorder::{LittleEndian, ReadBytesExt};
 
@@ -463,6 +463,7 @@ impl XlsWorkbook {
                 MulBlankRecord::RECORD_ID => MulBlankRecord::parse(&data)?.apply(&mut state),
                 BoolErrRecord::RECORD_ID => BoolErrRecord::parse(&data)?.apply(&mut state),
                 FormulaRecord::RECORD_ID => FormulaRecord::parse(&data)?.apply(&mut state),
+                StringRecord::RECORD_ID => StringRecord::parse(&data)?.apply(&mut state),
 
                 // Unknown records - silently ignore
                 _ => Ok(()),
@@ -962,5 +963,230 @@ mod tests {
         std::fs::remove_file(output_path).ok();
 
         println!("读写循环测试完成！");
+    }
+
+    /// 全面集成测试：测试大量字符串的 SST 分片写入和读取
+    #[test]
+    fn test_comprehensive_roundtrip_with_many_strings() -> Result<(), XlsError> {
+        use crate::xls::XlsCell;
+
+        let output_path = "data/test_comprehensive_roundtrip.xls";
+
+        // 创建包含大量不同字符串的数据集
+        let mut workbook = XlsWorkbook::new();
+        let mut sheet = XlsSheet::new("TestSheet".to_string());
+
+        println!("生成测试数据...");
+
+        // 第0行：短字符串
+        for col in 0..50 {
+            let text = format!("短_{}", col);
+            sheet.set_cell(0, col, XlsCell::Text(text));
+        }
+
+        // 第1行：中等长度字符串
+        for col in 0..30 {
+            let text = format!("这是中等长度的测试字符串_{:04}", col);
+            sheet.set_cell(1, col, XlsCell::Text(text));
+        }
+
+        // 第2行：长字符串（可能触发 SST 分片）
+        for col in 0..20 {
+            let text = format!(
+                "这是一个很长的测试字符串，用来测试 SST 分片功能_{:08}_{}",
+                col,
+                "abcdefghijklmnopqrstuvwxyz".repeat(10)
+            );
+            sheet.set_cell(2, col, XlsCell::Text(text));
+        }
+
+        // 第3行：数字
+        for col in 0..10 {
+            sheet.set_cell(3, col, XlsCell::Number((col * 100 + 42) as f64));
+        }
+
+        // 第4行：布尔值
+        for col in 0..10 {
+            sheet.set_cell(4, col, XlsCell::Boolean(col % 2 == 0));
+        }
+
+        // 第5-8行：更多混合数据以触发 SST 分片
+        for row in 5..9 {
+            for col in 0..40 {
+                let text = format!(
+                    "行{}列{}的测试数据_包含更多字符以占用SST空间_{}",
+                    row,
+                    col,
+                    "数据".repeat(20)
+                );
+                sheet.set_cell(row, col, XlsCell::Text(text));
+            }
+        }
+
+        workbook.sheets.push(sheet);
+
+        // 添加第二个工作表
+        let mut sheet2 = XlsSheet::new("Sheet2".to_string());
+        for row in 0..10 {
+            for col in 0..10 {
+                let text = format!("Sheet2_({},{})", row, col);
+                sheet2.set_cell(row, col, XlsCell::Text(text));
+            }
+        }
+        workbook.sheets.push(sheet2);
+
+        println!("工作表数据准备完成");
+        println!("  - 工作表1: 9行 x 50列");
+        println!("  - 工作表2: 10行 x 10列");
+
+        // 写入文件
+        println!("写入文件: {}", output_path);
+        workbook.write_xls(output_path)?;
+
+        let metadata = std::fs::metadata(output_path)?;
+        println!("文件大小: {} 字节", metadata.len());
+
+        // 读取文件
+        println!("读取文件...");
+        let loaded_workbook = XlsWorkbook::new().read_xls(output_path)?;
+
+        println!("读取完成，验证数据...");
+        assert_eq!(loaded_workbook.sheets.len(), 2, "应该有2个工作表");
+
+        // 验证工作表1
+        let loaded_sheet1 = &loaded_workbook.sheets[0];
+        assert_eq!(loaded_sheet1.sheet_name, "TestSheet", "工作表1名称不匹配");
+
+        // 验证短字符串
+        for col in 0..50 {
+            let expected = format!("短_{}", col);
+            if let Some(cell) = loaded_sheet1
+                .cell_iterator()
+                .find(|(r, c, _)| *r == 0 && *c == col)
+            {
+                match cell.2 {
+                    XlsCell::Text(s) => assert_eq!(s, &expected, "短字符串 (0,{}) 不匹配", col),
+                    _ => panic!("单元格 (0,{}) 不是文本类型", col),
+                }
+            } else {
+                panic!("缺少单元格 (0,{})", col);
+            }
+        }
+        println!("  ✓ 短字符串验证通过 (50个)");
+
+        // 验证中等长度字符串
+        for col in 0..30 {
+            let expected = format!("这是中等长度的测试字符串_{:04}", col);
+            if let Some(cell) = loaded_sheet1
+                .cell_iterator()
+                .find(|(r, c, _)| *r == 1 && *c == col)
+            {
+                match cell.2 {
+                    XlsCell::Text(s) => assert_eq!(s, &expected, "中等字符串 (1,{}) 不匹配", col),
+                    _ => panic!("单元格 (1,{}) 不是文本类型", col),
+                }
+            } else {
+                panic!("缺少单元格 (1,{})", col);
+            }
+        }
+        println!("  ✓ 中等长度字符串验证通过 (30个)");
+
+        // 验证长字符串（抽样检查）
+        for col in 0..20 {
+            let expected_prefix =
+                format!("这是一个很长的测试字符串，用来测试 SST 分片功能_{:08}", col);
+            if let Some(cell) = loaded_sheet1
+                .cell_iterator()
+                .find(|(r, c, _)| *r == 2 && *c == col)
+            {
+                match cell.2 {
+                    XlsCell::Text(s) => {
+                        assert!(
+                            s.starts_with(&expected_prefix),
+                            "长字符串 (2,{}) 前缀不匹配",
+                            col
+                        );
+                        assert!(s.len() > 200, "长字符串 (2,{}) 长度不足", col);
+                    }
+                    _ => panic!("单元格 (2,{}) 不是文本类型", col),
+                }
+            } else {
+                panic!("缺少单元格 (2,{})", col);
+            }
+        }
+        println!("  ✓ 长字符串验证通过 (20个)");
+
+        // 验证数字
+        for col in 0..10 {
+            let expected = (col * 100 + 42) as f64;
+            if let Some(cell) = loaded_sheet1
+                .cell_iterator()
+                .find(|(r, c, _)| *r == 3 && *c == col)
+            {
+                match cell.2 {
+                    XlsCell::Number(n) => {
+                        assert!((*n - expected).abs() < 0.001, "数字 (3,{}) 不匹配", col)
+                    }
+                    _ => panic!("单元格 (3,{}) 不是数字类型", col),
+                }
+            } else {
+                panic!("缺少单元格 (3,{})", col);
+            }
+        }
+        println!("  ✓ 数字验证通过 (10个)");
+
+        // 验证布尔值
+        for col in 0..10 {
+            let expected = col % 2 == 0;
+            if let Some(cell) = loaded_sheet1
+                .cell_iterator()
+                .find(|(r, c, _)| *r == 4 && *c == col)
+            {
+                match cell.2 {
+                    XlsCell::Boolean(b) => assert_eq!(*b, expected, "布尔值 (4,{}) 不匹配", col),
+                    _ => panic!("单元格 (4,{}) 不是布尔类型", col),
+                }
+            } else {
+                panic!("缺少单元格 (4,{})", col);
+            }
+        }
+        println!("  ✓ 布尔值验证通过 (10个)");
+
+        // 验证工作表2
+        let loaded_sheet2 = &loaded_workbook.sheets[1];
+        assert_eq!(loaded_sheet2.sheet_name, "Sheet2", "工作表2名称不匹配");
+
+        for row in 0..10 {
+            for col in 0..10 {
+                let expected = format!("Sheet2_({},{})", row, col);
+                if let Some(cell) = loaded_sheet2
+                    .cell_iterator()
+                    .find(|(r, c, _)| *r == row && *c == col)
+                {
+                    match cell.2 {
+                        XlsCell::Text(s) => {
+                            assert_eq!(s, &expected, "工作表2 ({},{}) 不匹配", row, col)
+                        }
+                        _ => panic!("工作表2 ({},{}) 不是文本类型", row, col),
+                    }
+                } else {
+                    panic!("缺少工作表2单元格 ({},{})", row, col);
+                }
+            }
+        }
+        println!("  ✓ 工作表2验证通过 (100个单元格)");
+
+        // 统计总单元格数
+        let total_cells_sheet1: usize = loaded_sheet1.cell_iterator().count();
+        let total_cells_sheet2: usize = loaded_sheet2.cell_iterator().count();
+        println!("\n总计:");
+        println!("  - 工作表1: {} 个非空单元格", total_cells_sheet1);
+        println!("  - 工作表2: {} 个非空单元格", total_cells_sheet2);
+
+        // 清理
+        std::fs::remove_file(output_path).ok();
+
+        println!("\n✅ 全面集成测试通过！");
+        Ok(())
     }
 }

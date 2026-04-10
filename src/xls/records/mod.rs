@@ -66,7 +66,7 @@ pub use worksheet::{
     calc_mode_record::CalcModeRecord,
     cell_records::{
         row_data_to_cell_records, BlankRecord, BoolErrRecord, FormulaRecord, LabelSSTRecord,
-        MulBlankRecord, MulRkRecord, NumberRecord, RKRecord,
+        MulBlankRecord, MulRkRecord, NumberRecord, RKRecord, StringRecord,
     },
     default_row_height_record::DefaultRowHeightRecord,
     delta_record::DeltaRecord,

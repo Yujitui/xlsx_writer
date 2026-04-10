@@ -351,8 +351,8 @@ pub enum FormulaResult {
 
 #[derive(Debug)]
 pub struct FormulaRecord {
-    row: u16,
-    col: u16,
+    pub row: u16,
+    pub col: u16,
     xf_idx: u16,
     result: FormulaResult,
 }
@@ -365,6 +365,11 @@ impl FormulaRecord {
             xf_idx,
             result: FormulaResult::Number(result),
         }
+    }
+
+    /// 检查公式结果是否为字符串类型
+    pub fn is_string_result(&self) -> bool {
+        matches!(self.result, FormulaResult::String(_))
     }
 }
 
@@ -954,22 +959,10 @@ impl ParsableRecord for FormulaRecord {
     }
 
     fn apply(&self, state: &mut ParseState) -> Result<(), XlsError> {
-        // 先获取字符串数据（避免借用冲突）
-        let text_for_string_result = if let FormulaResult::String(sst_idx) = &self.result {
-            if (*sst_idx as usize) < state.sst.get_strings().len() {
-                Some(state.sst.get_strings()[*sst_idx as usize].clone())
-            } else {
-                eprintln!("Warning: Formula SST index {} out of bounds", sst_idx);
-                Some(String::new())
-            }
-        } else {
-            None
-        };
-
-        let sheet = state.current_sheet_mut()?;
-
         match &self.result {
             FormulaResult::Number(value) => {
+                // 数字结果直接设置
+                let sheet = state.current_sheet_mut()?;
                 sheet.set_cell(
                     self.row as usize,
                     self.col as usize,
@@ -977,10 +970,76 @@ impl ParsableRecord for FormulaRecord {
                 );
             }
             FormulaResult::String(_) => {
-                if let Some(text) = text_for_string_result {
-                    sheet.set_cell(self.row as usize, self.col as usize, XlsCell::Text(text));
-                }
+                // 字符串结果：保存行列位置，等待 STRING 记录
+                state.last_formula_string_cell = Some((self.row, self.col));
+                // 不立即设置值，STRING 记录会处理
             }
+        }
+        Ok(())
+    }
+}
+
+/// STRING 记录 (0x0207)
+///
+/// 当公式返回字符串结果时，跟随在 FORMULA 记录之后，
+/// 包含实际的字符串值。
+#[derive(Debug)]
+pub struct StringRecord {
+    value: String,
+}
+
+impl StringRecord {
+    pub fn new(value: String) -> Self {
+        StringRecord { value }
+    }
+}
+
+impl ParsableRecord for StringRecord {
+    const RECORD_ID: u16 = 0x0207;
+
+    fn parse(data: &[u8]) -> Result<Self, XlsError> {
+        if data.len() < 3 {
+            return Err(XlsError::InvalidFormat(format!(
+                "StringRecord data too short: {} bytes",
+                data.len()
+            )));
+        }
+
+        let char_count = u16::from_le_bytes([data[0], data[1]]) as usize;
+        let flag = data[2];
+        let is_utf16 = (flag & 0x01) != 0;
+
+        let string_bytes = if is_utf16 { char_count * 2 } else { char_count };
+
+        if 3 + string_bytes > data.len() {
+            return Err(XlsError::InvalidFormat(format!(
+                "StringRecord data insufficient for {} characters",
+                char_count
+            )));
+        }
+
+        let value = if is_utf16 {
+            let u16_vec: Vec<u16> = data[3..3 + string_bytes]
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect();
+            String::from_utf16(&u16_vec).unwrap_or_default()
+        } else {
+            String::from_utf8_lossy(&data[3..3 + string_bytes]).to_string()
+        };
+
+        Ok(StringRecord { value })
+    }
+
+    fn apply(&self, state: &mut ParseState) -> Result<(), XlsError> {
+        // 使用上一个 FORMULA 记录保存的行列位置
+        if let Some((row, col)) = state.last_formula_string_cell.take() {
+            let sheet = state.current_sheet_mut()?;
+            sheet.set_cell(
+                row as usize,
+                col as usize,
+                XlsCell::Text(self.value.clone()),
+            );
         }
         Ok(())
     }
