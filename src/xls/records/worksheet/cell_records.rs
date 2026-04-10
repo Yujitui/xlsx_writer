@@ -273,8 +273,8 @@ impl BiffRecord for MulRkRecord {
     }
 
     fn data(&self) -> Vec<u8> {
-        let count = self.last_col - self.first_col + 1;
-        let mut buf = Vec::with_capacity(4 + count as usize * 6);
+        let count = (self.last_col as i32 - self.first_col as i32 + 1).max(0) as usize;
+        let mut buf = Vec::with_capacity(4 + count * 6);
         buf.extend_from_slice(&self.row.to_le_bytes());
         buf.extend_from_slice(&self.first_col.to_le_bytes());
         for (xf_idx, rk_encoded) in &self.rk_values {

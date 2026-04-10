@@ -1,9 +1,17 @@
-use crate::xls::{XlsSheet, XlsError, XlsCell, XlsRecordReader, RecordType};
-use std::fs::File;
-use std::io::{Write, Seek, SeekFrom, BufReader, Cursor, Read};
+use crate::xls::records::{
+    BackupRecord, BiffRecord, BoFRecord, BofType, BookBoolRecord, BoundSheetRecord, CodepageRecord,
+    DSFRecord, DateModeRecord, EofRecord, FnGroupCountRecord, Font, FontRecord, HideObjRecord,
+    InterfaceEndRecord, InterfaceHdrRecord, MMSRecord, NumberFormatRecord, ObjectProtectRecord,
+    PaletteRecord, PasswordRecord, PrecisionRecord, Prot4RevPassRecord, Prot4RevRecord,
+    ProtectRecord, RefreshAllRecord, SSTRecord, SharedStringTable, StyleRecord, TabIDRecord,
+    UseSelfsRecord, Window1Record, WindowProtectRecord, WriteAccessRecord, XFRecord,
+};
+use crate::xls::{RecordType, XlsCell, XlsError, XlsRecordReader, XlsSheet};
+use byteorder::{LittleEndian, ReadBytesExt};
 use cfb::CompoundFile;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use encoding_rs::UTF_16LE;
+use std::fs::File;
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
 
 /// 代表一个 Excel 97-2003 工作簿 (.xls 文件)。
 /// 该结构体同时支持读取和写入操作。
@@ -11,7 +19,6 @@ pub struct XlsWorkbook {
     /// 存储所有工作表的集合。
     /// 使用 Vec 保持工作表的顺序。
     sheets: Vec<XlsSheet>,
-
     // （可选）存储文件的其他元数据，如作者、创建时间等。
     // 这里可以根据需要扩展。
 }
@@ -107,390 +114,227 @@ impl XlsWorkbook {
 }
 
 impl XlsWorkbook {
-
     /// 将当前解析出的工作簿数据写入到一个新的 .xls 文件中
     pub fn write_xls(&self, output_path: &str) -> Result<(), XlsError> {
-        // 创建临时缓冲区用于构建 workbook 流
-        let mut workbook_stream = Vec::new();
-
-        // 写入 BOF（Workbook Globals）
-        self.write_bof(&mut workbook_stream, true)?;
-        // self.write_window1(&mut workbook_stream)?;
-        // self.write_default_font(&mut workbook_stream)?;
-        // for _ in 0..3 {
-        //     self.write_default_xf(&mut workbook_stream)?;
-        // }
-
-        // 记录 BoundSheet 起始位置
-        let boundsheet_start_pos = workbook_stream.len();
-
-        // 先计算所有 BoundSheet 的实际大小
-        let mut boundsheet_total_size = 0;
-        for sheet in &self.sheets {
-            let name_len = sheet.sheet_name.as_bytes().len();
-            let bound_sheet_size = 8 + name_len; // 8字节头部 + 1字节长度 + 名称长度
-            boundsheet_total_size += 4 + bound_sheet_size; // Record header (4 bytes) + data
-        }
-
-        // 预分配准确的 BoundSheet 空间
-        workbook_stream.resize(workbook_stream.len() + boundsheet_total_size, 0);
-
-        // 构建并写入 SST（共享字符串表）
-        let sst_strings: Vec<String> = self.collect_all_strings();
-        self.write_sst(&mut workbook_stream, &sst_strings)?;
-
-        // Step 2: 构建各个 sheet 的数据流及其偏移映射
-        let mut sheet_streams = Vec::new();
-        for sheet in &self.sheets {
-            let mut sheet_data = Vec::new();
-            self.write_sheet_data(&mut sheet_data, sheet, &sst_strings)?;
-            sheet_streams.push(sheet_data);
-        }
-
-        // Step 3: 写入每个 sheet 数据流，并记录偏移
-        let mut sheet_offsets = Vec::new();
-        for sheet_data in sheet_streams {
-            sheet_offsets.push(workbook_stream.len() as u32); // 当前流的位置即为此 sheet 的偏移
-            workbook_stream.extend_from_slice(&sheet_data);
-        }
-
-        // 回头更新 BoundSheet 记录
-        let mut boundsheet_updated = Vec::new();
-        for (i, sheet) in self.sheets.iter().enumerate() {
-            let offset = sheet_offsets[i];
-            self.write_boundsheet_with_offset(&mut boundsheet_updated, &sheet.sheet_name, offset)?;
-        }
-
-        // 精确替换占位符区域
-        let boundsheet_actual_end = boundsheet_start_pos + boundsheet_updated.len();
-        if boundsheet_actual_end <= workbook_stream.len() {
-            workbook_stream.splice(boundsheet_start_pos..boundsheet_actual_end, boundsheet_updated);
-        }
-
-        // Step 5: 写入 EOF 结束标志
-        self.write_eof(&mut workbook_stream)?;
-
-        // 创建CFB文件
+        let workbook_stream = self.get_biff_data();
         let file = File::create(output_path)?;
         let mut compound_file = CompoundFile::create(file)?;
-        // 写入Workbook流
         let mut stream = compound_file.create_stream("Workbook")?;
         stream.write_all(&workbook_stream)?;
         stream.flush()?;
-        // 关键：确保所有更改都被写入
         drop(stream);
         drop(compound_file);
         Ok(())
     }
 
-    // --- 辅助函数 ---
+    /// 生成工作簿的 BIFF 数据
+    ///
+    /// 此方法将工作簿序列化为 BIFF8 格式的字节流，包含完整的 Workbook Globals
+    /// 子流和所有工作表的 BIFF 数据。
+    pub fn get_biff_data(&self) -> Vec<u8> {
+        let mut result = Vec::new();
 
-    fn write_bof<W: Write>(&self, writer: &mut W, is_workbook: bool) -> Result<(), XlsError> {
-        let rt = RecordType::BOF.to_u16();
-        let size = 8u16; // BOF record 固定长度
-        let sub_rt = if is_workbook { 0x0005 } else { 0x0010 };
+        // 第一步：创建共享字符串表（sheet.get_biff_data 会在内部填充）
+        let mut sst = SharedStringTable::new();
 
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size)?;
-        writer.write_u16::<LittleEndian>(0x0600)?; // BIFF8 version
-        writer.write_u16::<LittleEndian>(sub_rt)?;
-        writer.write_u16::<LittleEndian>(0x0DBB)?; // Build identifier
-        writer.write_u16::<LittleEndian>(0x07CC)?; // Build year
+        // 第二步：生成每个工作表的 BIFF 数据
+        let sheet_biff_data: Vec<Vec<u8>> = self
+            .sheets
+            .iter()
+            .map(|sheet| sheet.get_biff_data(&mut sst))
+            .collect();
 
-        Ok(())
-    }
+        // 第三步：写入 Workbook Globals 头部记录
+        let header_data = self.write_workbook_header_records();
+        let header_len = header_data.len();
+        result.extend_from_slice(&header_data);
 
-    fn _write_window1<W: Write>(&self, writer: &mut W) -> Result<(), XlsError> {
-        let rt = RecordType::WINDOW1.to_u16();  // WINDOW1 record type
-        let size = 22u16;    // WINDOW1 record fixed size
+        // 第四步：创建 pending BOUNDSHEET 记录并计算大小
+        let mut pending_boundsheets: Vec<BoundSheetRecord> = self
+            .sheets
+            .iter()
+            .map(|sheet| BoundSheetRecord::new_pending(&sheet.sheet_name))
+            .collect();
+        let boundsheets_total_len: usize = pending_boundsheets
+            .iter()
+            .map(|r| r.serialize().len())
+            .sum();
 
-        // 窗口参数
-        let x_wn = 0u16;     // 窗口左坐标
-        let y_wn = 0u16;     // 窗口顶坐标
-        let dx_wn = 0x10C0u16; // 窗口宽度
-        let dy_wn = 0x0FF0u16; // 窗口高度
-        let grbit = 0x0038u16; // 窗口标志：最大化显示
-        let itab_cur = 0u16;   // 当前工作表索引
-        let itab_first = 0u16; // 第一个可见工作表索引
-        let c_itab_vis = 1u16; // 可见工作表数量
-        let h_scroll = 0u16;   // 水平滚动位置
-        let v_scroll = 0u16;   // 垂直滚动位置
-        let w_tab_ratio = 0x0258u16; // 标签比例
+        // 第五步：计算 BOUNDSHEET 偏移
+        let sst_data = SSTRecord::from(&sst).serialize();
+        let eof_data = EofRecord::default().serialize();
+        let after_boundsheets_len = sst_data.len() + eof_data.len();
 
-        // 写入记录头
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size)?;
-
-        // 写入WINDOW1数据
-        writer.write_u16::<LittleEndian>(x_wn)?;
-        writer.write_u16::<LittleEndian>(y_wn)?;
-        writer.write_u16::<LittleEndian>(dx_wn)?;
-        writer.write_u16::<LittleEndian>(dy_wn)?;
-        writer.write_u16::<LittleEndian>(grbit)?;
-        writer.write_u16::<LittleEndian>(itab_cur)?;
-        writer.write_u16::<LittleEndian>(itab_first)?;
-        writer.write_u16::<LittleEndian>(c_itab_vis)?;
-        writer.write_u16::<LittleEndian>(h_scroll)?;
-        writer.write_u16::<LittleEndian>(v_scroll)?;
-        writer.write_u16::<LittleEndian>(w_tab_ratio)?;
-
-        Ok(())
-    }
-
-    fn _write_default_font<W: Write>(&self, writer: &mut W) -> Result<(), XlsError> {
-        let rt = RecordType::FONT.to_u16();  // FONT record type
-        let size = 22u16;    // FONT record size
-
-        let height = 200u16;     // 字体高度 (200 twips = 10 points)
-        let flags = 0u16;        // 字体标志位
-        let color = 0x0000u16;   // 颜色索引 (黑色)
-        let weight = 0x0190u16;  // 字体粗细 (400 = normal)
-        let escapement = 0u16;   // 上下标
-        let underline = 0u16;    // 下划线
-        let family = 0u16;       // 字体族
-        let charset = 0u16;      // 字符集
-        let name_len = 5u8;      // 字体名称长度
-        let name_data = b"Arial"; // 字体名称
-
-        // 写入记录头
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size)?;
-
-        // 写入FONT数据
-        writer.write_u16::<LittleEndian>(height)?;
-        writer.write_u16::<LittleEndian>(flags)?;
-        writer.write_u16::<LittleEndian>(color)?;
-        writer.write_u16::<LittleEndian>(weight)?;
-        writer.write_u16::<LittleEndian>(escapement)?;
-        writer.write_u16::<LittleEndian>(underline)?;
-        writer.write_u16::<LittleEndian>(family)?;
-        writer.write_u16::<LittleEndian>(charset)?;
-        writer.write_u8(name_len)?;
-        writer.write_all(name_data)?;
-
-        Ok(())
-    }
-
-    fn _write_default_xf<W: Write>(&self, writer: &mut W) -> Result<(), XlsError> {
-        let rt = RecordType::XF.to_u16();  // XF record type
-        let size = 30u16;    // XF record size
-
-        let font_index = 0u16;       // 字体索引
-        let format_index = 0u16;     // 格式索引
-        let xtype = 0x0000u16;       // XF类型
-        let align = 0x0000u16;       // 对齐方式
-        let rotation = 0u16;         // 旋转角度
-        let indent = 0u16;           // 缩进
-        let flags = 0x0000u16;       // 标志位
-        let border1 = 0x0000u32;     // 边框1
-        let border2 = 0x0000u32;     // 边框2
-        let back_color = 0x00000000u32; // 背景色
-        let pattern_color = 0x00000000u32; // 图案颜色
-
-        // 写入记录头
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size)?;
-
-        // 写入XF数据
-        writer.write_u16::<LittleEndian>(font_index)?;
-        writer.write_u16::<LittleEndian>(format_index)?;
-        writer.write_u16::<LittleEndian>(xtype)?;
-        writer.write_u16::<LittleEndian>(align)?;
-        writer.write_u16::<LittleEndian>(rotation)?;
-        writer.write_u16::<LittleEndian>(indent)?;
-        writer.write_u16::<LittleEndian>(flags)?;
-        writer.write_u32::<LittleEndian>(border1)?;
-        writer.write_u32::<LittleEndian>(border2)?;
-        writer.write_u32::<LittleEndian>(back_color)?;
-        writer.write_u32::<LittleEndian>(pattern_color)?;
-
-        Ok(())
-    }
-
-
-    // 新增方法：带偏移的 BoundSheet 写入
-    fn write_boundsheet_with_offset<W: Write>(
-        &self,
-        writer: &mut W,
-        name: &str,
-        pos: u32,
-    ) -> Result<(), XlsError> {
-        let rt = RecordType::BOUNDSHEET.to_u16();
-        let flags = 0u16; // 可视性等选项，默认隐藏状态为普通可见
-        let name_grbit = 00u8;
-        let name_bytes = name.as_bytes();
-        let name_len = name_bytes.len() as u8;
-
-        let size = 8 + name_len as usize;
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size as u16)?;
-        writer.write_u32::<LittleEndian>(pos)?;         // 正确偏移！
-        writer.write_u16::<LittleEndian>(flags)?;
-        writer.write_u8(name_len)?;
-        writer.write_u8(name_grbit)?;
-        writer.write_all(name_bytes)?;
-
-        Ok(())
-    }
-
-    fn write_sst<W: Write>(&self, writer: &mut W, strings: &[String]) -> Result<(), XlsError> {
-        let rt = RecordType::SST.to_u16();
-
-        // 计算准确的总大小
-        let mut string_data_size = 0usize;
-        let utf16_strings: Vec<Vec<u8>> = strings.iter().map(|s| {
-            let utf16_bytes: Vec<u8> = s.encode_utf16()
-                .flat_map(|c| c.to_le_bytes())
-                .collect();
-            string_data_size += 3 + utf16_bytes.len(); // char_count(2) + flag(1) + string_data(len)
-            utf16_bytes
-        }).collect();
-
-        let total_size = 8 + 4 + string_data_size; // header(8) + counts(8) + string_data
-
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>((total_size - 4) as u16)?; // Size excludes first 4 bytes
-        writer.write_u32::<LittleEndian>(strings.len() as u32)?; // total unique strings
-        writer.write_u32::<LittleEndian>(strings.len() as u32)?; // total occurrences
-
-        for utf16_bytes in &utf16_strings {
-            let char_count = utf16_bytes.len() / 2;
-            writer.write_u16::<LittleEndian>(char_count as u16)?; // character count
-            writer.write_u8(0x01)?; // flag (UTF-16 little endian)
-            writer.write_all(utf16_bytes)?;
+        // 每个 sheet 的偏移 = header_len + boundsheets_total_len + after_boundsheets_len + 前面所有 sheet 数据长度之和
+        let mut current_offset =
+            (header_len + boundsheets_total_len + after_boundsheets_len) as u32;
+        for sheet_data in &sheet_biff_data {
+            current_offset += sheet_data.len() as u32;
         }
 
-        Ok(())
-    }
-
-    fn collect_all_strings(&self) -> Vec<String> {
-        let mut strings = std::collections::HashSet::new();
-        for sheet in &self.sheets {
-            for row in &sheet.rows {
-                for cell in row {
-                    if let Some(XlsCell::Text(s)) = cell {
-                        strings.insert(s.clone());
-                    }
-                }
-            }
-        }
-        strings.into_iter().collect()
-    }
-
-    fn write_sheet_data<W: Write>(
-        &self,
-        writer: &mut W,
-        sheet: &XlsSheet,
-        sst: &[String],
-    ) -> Result<(), XlsError> {
-        // 写入 Sheet BOF
-        self.write_bof(writer, false)?;
-
-        // 写入 DIMENSIONS record
-        self.write_dimensions(writer, sheet)?;
-
-        // 遍历每一行写入 ROW 和 CELL 数据
-        for (r, row) in sheet.rows.iter().enumerate() {
-            self.write_row(writer, r as u16, row.len() as u16)?;
-            for (c, cell) in row.iter().enumerate() {
-                if let Some(cell_data) = cell {
-                    match cell_data {
-                        XlsCell::Number(n) => self.write_number_cell(writer, r as u16, c as u16, *n)?,
-                        XlsCell::Text(t) => {
-                            let idx = sst.iter().position(|s| s == t).unwrap_or(0);
-                            self.write_label_sst_cell(writer, r as u16, c as u16, idx as u32)?;
-                        },
-                        XlsCell::Boolean(b) => self.write_bool_cell(writer, r as u16, c as u16, *b)?,
-                    }
-                }
-            }
+        // 从后往前设置偏移（因为 current_offset 现在是末尾位置）
+        for (i, sheet_data) in sheet_biff_data.iter().enumerate().rev() {
+            current_offset -= sheet_data.len() as u32;
+            pending_boundsheets[i].set_offset(current_offset);
         }
 
-        // 写入 Sheet EOF
-        self.write_eof(writer)?;
-        Ok(())
+        // 第六步：写入带正确偏移的 BOUNDSHEET 记录
+        for boundsheet in &pending_boundsheets {
+            result.extend_from_slice(&boundsheet.serialize());
+        }
+
+        // 第七步：写入 SST
+        result.extend_from_slice(&sst_data);
+
+        // 第八步：写入 EOF（Workbook Globals 子流结束）
+        result.extend_from_slice(&eof_data);
+
+        // 第九步：写入工作表数据
+        for sheet_data in sheet_biff_data {
+            result.extend_from_slice(&sheet_data);
+        }
+
+        result
     }
 
-    fn write_dimensions<W: Write>(&self, writer: &mut W, sheet: &XlsSheet) -> Result<(), XlsError> {
-        let rt = RecordType::DIMENSIONS.to_u16();
-        let size = 14;
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size as u16)?;
+    /// 写入 Workbook Globals 头部记录（从 BOF 到 UseSelfs）
+    fn write_workbook_header_records(&self) -> Vec<u8> {
+        let mut result = Vec::new();
 
-        let (max_row, max_col) = sheet.data_range().unwrap_or((0, 0));
-        writer.write_u32::<LittleEndian>(0)?; // First row
-        writer.write_u32::<LittleEndian>((max_row + 1) as u32)?; // Last row + 1
-        writer.write_u16::<LittleEndian>(0)?; // First column
-        writer.write_u16::<LittleEndian>((max_col + 1) as u16)?; // Last column + 1
-        writer.write_u16::<LittleEndian>(0)?; // Reserved
+        // BOF - Workbook globals
+        result.extend_from_slice(&BoFRecord::new(BofType::WorkbookGlobals).serialize());
 
-        Ok(())
+        // InterfaceHdr
+        result.extend_from_slice(&InterfaceHdrRecord::default().serialize());
+
+        // MMS
+        result.extend_from_slice(&MMSRecord::default().serialize());
+
+        // InterfaceEnd
+        result.extend_from_slice(&InterfaceEndRecord::default().serialize());
+
+        // WriteAccess
+        result.extend_from_slice(&WriteAccessRecord::new("yujitui").serialize());
+
+        // Codepage
+        result.extend_from_slice(&CodepageRecord::new().serialize());
+
+        // DSF
+        result.extend_from_slice(&DSFRecord::default().serialize());
+
+        // TabID
+        result.extend_from_slice(&TabIDRecord::new(self.sheets.len() as u16).serialize());
+
+        // FnGroupCount
+        result.extend_from_slice(&FnGroupCountRecord::default().serialize());
+
+        // Workbook Protection Block
+        result.extend_from_slice(&WindowProtectRecord::default().serialize());
+        result.extend_from_slice(&ProtectRecord::default().serialize());
+        result.extend_from_slice(&ObjectProtectRecord::default().serialize());
+        result.extend_from_slice(&PasswordRecord::default().serialize());
+        result.extend_from_slice(&Prot4RevRecord::default().serialize());
+        result.extend_from_slice(&Prot4RevPassRecord::default().serialize());
+
+        // Backup
+        result.extend_from_slice(&BackupRecord::default().serialize());
+
+        // HideObj
+        result.extend_from_slice(&HideObjRecord::default().serialize());
+
+        // Window1
+        result.extend_from_slice(&Window1Record::default().serialize());
+
+        // DateMode
+        result.extend_from_slice(&DateModeRecord::default().serialize());
+
+        // Precision
+        result.extend_from_slice(&PrecisionRecord::default().serialize());
+
+        // RefreshAll
+        result.extend_from_slice(&RefreshAllRecord::default().serialize());
+
+        // BookBool
+        result.extend_from_slice(&BookBoolRecord::default().serialize());
+
+        // Fonts (8 fonts: 4x Arial + 1x Times New Roman + 3x Arial)
+        result.extend_from_slice(&self.write_default_fonts());
+
+        // Number Formats
+        result.extend_from_slice(&self.write_default_formats());
+
+        // XF records
+        result.extend_from_slice(&self.write_default_xf_records());
+
+        // Style
+        result.extend_from_slice(&StyleRecord::default().serialize());
+
+        // Palette
+        result.extend_from_slice(&PaletteRecord::default().serialize());
+
+        // UseSelfs
+        result.extend_from_slice(&UseSelfsRecord::default().serialize());
+
+        result
     }
 
-    fn write_row<W: Write>(&self, writer: &mut W, row_index: u16, last_col: u16) -> Result<(), XlsError> {
-        let rt = RecordType::Row.to_u16();
-        let size = 16;
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size as u16)?;  // 16字节
-        writer.write_u16::<LittleEndian>(row_index)?;    // 0-3: row index
-        writer.write_u16::<LittleEndian>(0)?;            // 4-7: first column (0)
-        writer.write_u16::<LittleEndian>(last_col)?; // 8-11: last column
-        writer.write_u16::<LittleEndian>(0)?;            // 12-13: row height (default)
-        writer.write_u16::<LittleEndian>(0)?;            // 14-15: reserved
-        writer.write_u16::<LittleEndian>(0)?;            // 14-15: reserved
-        writer.write_u16::<LittleEndian>(0)?;            // 14-15: reserved
-        writer.write_u16::<LittleEndian>(0)?;            // 14-15: reserved
-        Ok(())
+    /// 写入默认字体记录
+    ///
+    /// 根据 xlwt 和 AI.md，需要 8 个字体：
+    /// - Font 0-3: Arial (4个相同的默认字体，用于 XF 0-3)
+    /// - Font 4: Arial (用于 XF 4)
+    /// - Font 5: Times New Roman Bold (用于 XF 5)
+    /// - Font 6: Arial (用于 XF 6)
+    /// - Font 7: Arial (用于 XF 7+)
+    fn write_default_fonts(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        for _ in 0..5 {
+            let font = Font::new("Arial");
+            result.extend_from_slice(&FontRecord::new(font).serialize());
+        }
+
+        let times = Font::new("Times New Roman").with_bold();
+        result.extend_from_slice(&FontRecord::new(times).serialize());
+
+        for _ in 0..2 {
+            let font = Font::new("Arial");
+            result.extend_from_slice(&FontRecord::new(font).serialize());
+        }
+
+        result
     }
 
-    fn write_number_cell<W: Write>(&self, writer: &mut W, row: u16, col: u16, value: f64) -> Result<(), XlsError> {
-        let rt = RecordType::NUMBER.to_u16();
-        let size = 14;
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size as u16)?;
-        writer.write_u16::<LittleEndian>(row)?;
-        writer.write_u16::<LittleEndian>(col)?;
-        writer.write_u16::<LittleEndian>(0)?; // XF Index placeholder
-        writer.write_f64::<LittleEndian>(value)?;
-        Ok(())
+    /// 写入默认数字格式记录
+    fn write_default_formats(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        let general_format = NumberFormatRecord::new(0x00A4, "General");
+        result.extend_from_slice(&general_format.serialize());
+
+        result
     }
 
-    fn write_label_sst_cell<W: Write>(&self, writer: &mut W, row: u16, col: u16, sst_index: u32) -> Result<(), XlsError> {
-        let rt = RecordType::LABELSST.to_u16();
-        let size = 10;
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size as u16)?;
-        writer.write_u16::<LittleEndian>(row)?;
-        writer.write_u16::<LittleEndian>(col)?;
-        writer.write_u16::<LittleEndian>(0)?; // XF Index placeholder
-        writer.write_u32::<LittleEndian>(sst_index)?;
-        Ok(())
-    }
+    /// 写入默认 XF 记录
+    ///
+    /// 根据 AI.md，需要 16 个 XF 记录：
+    /// - XF 0-13: Style XF (font=6, format=0x00A4, type=Style)
+    ///   实际 AI.md 显示前 15 个 XF 记录格式相似
+    /// - XF 14-15: Style XF (不同字体)
+    /// - 最后 1 个: Style XF (font=0, format=0x00A4)
+    fn write_default_xf_records(&self) -> Vec<u8> {
+        let mut result = Vec::new();
 
-    fn write_bool_cell<W: Write>(&self, writer: &mut W, row: u16, col: u16, value: bool) -> Result<(), XlsError> {
-        let rt = RecordType::BOOL.to_u16();
-        let size = 8;
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size as u16)?;
-        writer.write_u16::<LittleEndian>(row)?;
-        writer.write_u16::<LittleEndian>(col)?;
-        writer.write_u16::<LittleEndian>(0)?; // XF Index placeholder
-        writer.write_u8(value as u8)?;
-        writer.write_u8(0)?; // padding
-        Ok(())
-    }
+        // 使用 16 个默认 XF 记录（简化实现，全部是 Style XF）
+        for _ in 0..16 {
+            result.extend_from_slice(&XFRecord::default().serialize());
+        }
 
-    fn write_eof<W: Write>(&self, writer: &mut W) -> Result<(), XlsError> {
-        let rt = RecordType::EOF.to_u16();
-        let size = 0;
-        writer.write_u16::<LittleEndian>(rt)?;
-        writer.write_u16::<LittleEndian>(size)?;
-        Ok(())
+        result
     }
 }
 
 impl XlsWorkbook {
-
     /// 从指定路径读取并解析一个 Excel (.xls) 文件。
     ///
     /// 此函数是 `XlsReader` 的核心公共接口，负责执行整个文件加载和解析过程。
@@ -515,7 +359,9 @@ impl XlsWorkbook {
         let file = File::open(path).map_err(XlsError::IoError)?;
         let mut buf_reader = BufReader::new(file);
         let mut buffer = Vec::new();
-        buf_reader.read_to_end(&mut buffer).map_err(XlsError::IoError)?;
+        buf_reader
+            .read_to_end(&mut buffer)
+            .map_err(XlsError::IoError)?;
 
         // 将文件内容作为 Cursor 处理，便于随机访问
         let mut cursor = Cursor::new(buffer);
@@ -524,11 +370,14 @@ impl XlsWorkbook {
         let mut cfb = CompoundFile::open(&mut cursor).map_err(XlsError::IoError)?;
 
         // 解析 Workbook 流
-        let workbook_stream = cfb.open_stream("Workbook")
+        let workbook_stream = cfb
+            .open_stream("Workbook")
             .map_err(|_| XlsError::InvalidFormat("Workbook stream not found".into()))?;
 
         // 将流中的所有字节收集到一个 Vec<u8> 中，以便后续解析。
-        let bytes: Vec<u8> = workbook_stream.bytes().collect::<Result<Vec<_>, _>>()
+        let bytes: Vec<u8> = workbook_stream
+            .bytes()
+            .collect::<Result<Vec<_>, _>>()
             .map_err(XlsError::IoError)?;
 
         // 创建一个新的 Cursor 来包装这些字节，供 `parse_workbook` 方法读取。
@@ -546,7 +395,7 @@ impl XlsWorkbook {
                         continue;
                     }
                 }
-            },
+            }
             Err(e) => return Err(e),
         }
 
@@ -554,8 +403,10 @@ impl XlsWorkbook {
     }
 
     fn parse_bof<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
-        sheets: &Vec<XlsSheet>, sheet_names: &Vec<String>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
+        sheets: &Vec<XlsSheet>,
+        sheet_names: &Vec<String>,
     ) -> Result<(), XlsError> {
         let _version = reader.read_u16::<LittleEndian>()?;
         let substream_type = reader.read_u16::<LittleEndian>()?;
@@ -563,28 +414,33 @@ impl XlsWorkbook {
         match substream_type {
             0x0005 => println!("正在解析：全局工作簿信息 (Workbook Globals)"),
             0x0010 => {
-                let name = sheet_names.get(sheets.len())
+                let name = sheet_names
+                    .get(sheets.len())
                     .cloned()
                     .unwrap_or_else(|| format!("Sheet{}", sheets.len() + 1));
-                *current_sheet = Some(XlsSheet { sheet_name: name, rows: Vec::new() });
-            },
-            _ => {},
+                *current_sheet = Some(XlsSheet {
+                    sheet_name: name,
+                    rows: Vec::new(),
+                });
+            }
+            _ => {}
         }
         Ok(())
     }
 
     fn parse_bound_sheet<R: Read + Seek>(
-        reader: &mut R, sheet_names: &mut Vec<String>,
+        reader: &mut R,
+        sheet_names: &mut Vec<String>,
     ) -> Result<(), XlsError> {
         let _pos = reader.read_u32::<LittleEndian>()?;
         let _visibility = reader.read_u8()?;
         let _type = reader.read_u8()?;
 
         let char_count = reader.read_u8()? as usize; // 字符数
-        let grbit = reader.read_u8()?;               // 编码标志位
+        let grbit = reader.read_u8()?; // 编码标志位
 
-        let is_compressed = (grbit & 0x01) == 0;     // bit 0: 0=压缩, 1=未压缩
-        let is_utf16 = (grbit & 0x08) == 0;          // bit 3: 0=ASCII, 1=Unicode   // 新增：检查是否压缩
+        let is_compressed = (grbit & 0x01) == 0; // bit 0: 0=压缩, 1=未压缩
+        let is_utf16 = (grbit & 0x08) == 0; // bit 3: 0=ASCII, 1=Unicode   // 新增：检查是否压缩
 
         let sheet_name = if is_utf16 && !is_compressed {
             // UTF-16LE 模式：每个字符 2 字节
@@ -604,17 +460,19 @@ impl XlsWorkbook {
     }
 
     fn parse_sst<R: Read + Seek>(
-        reader: &mut R, length: &usize,
-        sst: &mut Vec<String>
+        reader: &mut R,
+        length: &usize,
+        sst: &mut Vec<String>,
     ) -> Result<(), XlsError> {
         let mut rec_reader = XlsRecordReader::new(reader, *length);
         let _total_strings = rec_reader.inner.read_u32::<LittleEndian>()?; // 全局总数
-        let unique_count = rec_reader.inner.read_u32::<LittleEndian>()?;   // 唯一数
-        rec_reader.current_record_remaining -= 8;
+        let unique_count = rec_reader.inner.read_u32::<LittleEndian>()?; // 唯一数
+        rec_reader.current_record_remaining = rec_reader.current_record_remaining.saturating_sub(8);
 
         for _ in 0..unique_count {
             let char_count = rec_reader.inner.read_u16::<LittleEndian>()? as usize;
-            rec_reader.current_record_remaining -= 2;
+            rec_reader.current_record_remaining =
+                rec_reader.current_record_remaining.saturating_sub(2);
 
             let flag = rec_reader.read_u8()?;
             let is_utf16 = (flag & 0x01) != 0;
@@ -624,12 +482,14 @@ impl XlsWorkbook {
             let mut rich_runs = 0;
             if has_rich {
                 rich_runs = rec_reader.inner.read_u16::<LittleEndian>()?;
-                rec_reader.current_record_remaining -= 2;
+                rec_reader.current_record_remaining =
+                    rec_reader.current_record_remaining.saturating_sub(2);
             }
             let mut ext_size = 0;
             if has_ext {
                 ext_size = rec_reader.inner.read_u32::<LittleEndian>()?;
-                rec_reader.current_record_remaining -= 4;
+                rec_reader.current_record_remaining =
+                    rec_reader.current_record_remaining.saturating_sub(4);
             }
 
             // 读取字符串主体（这里是最坑的地方，Continue 可能在这里切断）
@@ -640,7 +500,9 @@ impl XlsWorkbook {
             while remaining_chars > 0 {
                 // 如果遇到 Continue 记录，Continue 开头会有一个新的 flag 字节覆盖编码格式！
                 if rec_reader.current_record_remaining == 0 {
-                    if !rec_reader.ensure_data()? { break; }
+                    if !rec_reader.ensure_data()? {
+                        break;
+                    }
                     let new_flag = rec_reader.read_u8()?;
                     current_is_utf16 = (new_flag & 0x01) != 0;
                 }
@@ -664,14 +526,19 @@ impl XlsWorkbook {
             sst.push(res.into_owned());
 
             // 跳过 Rich Text 和 Extension 数据
-            for _ in 0..(rich_runs * 4) { rec_reader.read_u8()?; }
-            for _ in 0..ext_size { rec_reader.read_u8()?; }
+            for _ in 0..(rich_runs * 4) {
+                rec_reader.read_u8()?;
+            }
+            for _ in 0..ext_size {
+                rec_reader.read_u8()?;
+            }
         }
         Ok(())
     }
 
     fn parse_dimensions<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
     ) -> Result<(), XlsError> {
         // 初始化当前工作表的行结构
         let _first_row = reader.read_u32::<LittleEndian>()?;
@@ -690,7 +557,8 @@ impl XlsWorkbook {
     }
 
     fn parse_row<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
     ) -> Result<(), XlsError> {
         let row_index = reader.read_u16::<LittleEndian>()? as usize;
         let _first_col = reader.read_u16::<LittleEndian>()? as usize;
@@ -707,7 +575,8 @@ impl XlsWorkbook {
     }
 
     fn parse_number<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
     ) -> Result<(), XlsError> {
         let row = reader.read_u16::<LittleEndian>()? as usize;
         let col = reader.read_u16::<LittleEndian>()? as usize;
@@ -721,7 +590,8 @@ impl XlsWorkbook {
     }
 
     fn parse_rk<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
     ) -> Result<(), XlsError> {
         let row = reader.read_u16::<LittleEndian>()? as usize;
         let col = reader.read_u16::<LittleEndian>()? as usize;
@@ -759,7 +629,8 @@ impl XlsWorkbook {
     }
 
     fn parse_mulrk<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
         length: &usize,
     ) -> Result<(), XlsError> {
         let row = reader.read_u16::<LittleEndian>()? as usize;
@@ -803,7 +674,8 @@ impl XlsWorkbook {
     }
 
     fn parse_label<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
     ) -> Result<(), XlsError> {
         let row = reader.read_u16::<LittleEndian>()? as usize;
         let col = reader.read_u16::<LittleEndian>()? as usize;
@@ -820,7 +692,8 @@ impl XlsWorkbook {
     }
 
     fn parse_label_sst<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
         sst: &Vec<String>,
     ) -> Result<(), XlsError> {
         let row = reader.read_u16::<LittleEndian>()? as usize;
@@ -838,7 +711,8 @@ impl XlsWorkbook {
     }
 
     fn parse_formula<R: Read + Seek>(
-        reader: &mut R, current_sheet: &mut Option<XlsSheet>,
+        reader: &mut R,
+        current_sheet: &mut Option<XlsSheet>,
         length: &usize,
     ) -> Result<(), XlsError> {
         let row = reader.read_u16::<LittleEndian>()? as usize;
@@ -861,7 +735,8 @@ impl XlsWorkbook {
     }
 
     fn parse_eof(
-        current_sheet: &mut Option<XlsSheet>, sheets: &mut Vec<XlsSheet>,
+        current_sheet: &mut Option<XlsSheet>,
+        sheets: &mut Vec<XlsSheet>,
     ) -> Result<(), XlsError> {
         if let Some(sheet) = current_sheet.take() {
             sheets.push(sheet); // 将完成的工作表加入列表
@@ -873,10 +748,8 @@ impl XlsWorkbook {
         Ok(())
     }
 
-    fn parse_workbook<R: Read + Seek>(
-        reader: &mut R,
-    ) -> Result<Vec<XlsSheet>, XlsError> {
-        let mut sheets = Vec::new();                    // 存储所有工作表
+    fn parse_workbook<R: Read + Seek>(reader: &mut R) -> Result<Vec<XlsSheet>, XlsError> {
+        let mut sheets = Vec::new(); // 存储所有工作表
         let mut current_sheet: Option<XlsSheet> = None; // 当前正在解析的工作表
         let mut sheet_names: Vec<String> = Vec::new();
         let mut sst: Vec<String> = Vec::new();
@@ -909,7 +782,9 @@ impl XlsWorkbook {
 
             match record_type {
                 // BOF (Beginning of File) - 表示新部分的开始
-                RecordType::BOF  => Self::parse_bof(reader, &mut current_sheet, &mut sheets, &sheet_names)?,
+                RecordType::BOF => {
+                    Self::parse_bof(reader, &mut current_sheet, &mut sheets, &sheet_names)?
+                }
                 // BOUNDSHEET - 定义工作表的位置和名称
                 RecordType::BOUNDSHEET => Self::parse_bound_sheet(reader, &mut sheet_names)?,
                 // SST - 定义共享字符串
@@ -933,7 +808,9 @@ impl XlsWorkbook {
                 // EOF (End of File) - 表示当前部分结束
                 RecordType::EOF => Self::parse_eof(&mut current_sheet, &mut sheets)?,
                 // 忽略未知或未处理的记录
-                _ => { reader.seek(SeekFrom::Current(length as i64))?; } // 跳过该记录内容
+                _ => {
+                    reader.seek(SeekFrom::Current(length as i64))?;
+                } // 跳过该记录内容
             }
 
             let end_pos = start_pos + length as u64;
@@ -1002,8 +879,10 @@ mod tests {
 
             let record_type = _get_record_type_name(record_type_code);
 
-            println!("位置 {:08X}: {} (0x{:04X}) - 长度: {} 字节",
-                     current_pos, record_type, record_type_code, length);
+            println!(
+                "位置 {:08X}: {} (0x{:04X}) - 长度: {} 字节",
+                current_pos, record_type, record_type_code, length
+            );
 
             // 显示前几个字节的数据（用于调试）
             if length > 0 && length <= 1000 {
@@ -1062,10 +941,9 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_write_xls_content_analysis() -> Result<(), XlsError> {
-        let input_path = "data/工作簿1.xls";       // 原始输入文件路径
+        let input_path = "data/工作簿1.xls"; // 原始输入文件路径
         let temp_output_path = "data/工作簿1_temp.xls"; // 输出中间文件路
 
         // 读取原始文件
@@ -1095,7 +973,7 @@ mod tests {
         // 检查是否有 BoundSheet 记录 (0x0085)
         let mut found_boundsheet = false;
         for i in 0..written_data.len().saturating_sub(2) {
-            if written_data[i] == 0x85 && written_data[i+1] == 0x00 {
+            if written_data[i] == 0x85 && written_data[i + 1] == 0x00 {
                 println!("✓ 找到 BoundSheet 记录在位置 {}", i);
                 found_boundsheet = true;
                 break;
@@ -1108,7 +986,7 @@ mod tests {
         // 检查 EOF 记录 (0x000A)
         let mut found_eof = false;
         for i in 0..written_data.len().saturating_sub(2) {
-            if written_data[i] == 0x0A && written_data[i+1] == 0x00 {
+            if written_data[i] == 0x0A && written_data[i + 1] == 0x00 {
                 println!("✓ 找到 EOF 记录在位置 {}", i);
                 found_eof = true;
                 break;
@@ -1123,7 +1001,7 @@ mod tests {
 
     #[test]
     fn test_write_xls_stream_debug() -> Result<(), XlsError> {
-        let input_path = "data/工作簿1.xls";       // 原始输入文件路径
+        let input_path = "data/工作簿1.xls"; // 原始输入文件路径
         let temp_output_path = "data/工作簿1_temp.xls"; // 输出中间文件路
         let example_path = "data/example.xls";
 
@@ -1140,10 +1018,9 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn test_write_xls_roundtrip() -> Result<(), XlsError> {
-        let input_path = "data/工作簿1.xls";       // 原始输入文件路径
+        let input_path = "data/工作簿1.xls"; // 原始输入文件路径
         let temp_output_path = "data/工作簿1_temp.xls"; // 输出中间文件路径
 
         // 第一步：读取原始文件
@@ -1152,7 +1029,12 @@ mod tests {
 
         println!("原始文件工作表数量: {}", parsed_workbook.sheets.len());
         for (i, sheet) in parsed_workbook.sheets.iter().enumerate() {
-            println!("  工作表 {}: {} ({} 行)", i, sheet.sheet_name, sheet.rows.len());
+            println!(
+                "  工作表 {}: {} ({} 行)",
+                i,
+                sheet.sheet_name,
+                sheet.rows.len()
+            );
         }
 
         // 第二步：写出到临时文件
@@ -1173,18 +1055,23 @@ mod tests {
         // 这里就会失败...
         assert_eq!(parsed_workbook.sheets.len(), reloaded_workbook.sheets.len());
 
-        for (original_sheet, reloaded_sheet) in parsed_workbook.sheets.iter().zip(reloaded_workbook.sheets.iter()) {
+        for (original_sheet, reloaded_sheet) in parsed_workbook
+            .sheets
+            .iter()
+            .zip(reloaded_workbook.sheets.iter())
+        {
             assert_eq!(original_sheet.sheet_name, reloaded_sheet.sheet_name);
             assert_eq!(original_sheet.rows.len(), reloaded_sheet.rows.len());
 
-            for (orig_row, reload_row) in original_sheet.rows.iter().zip(reloaded_sheet.rows.iter()) {
+            for (orig_row, reload_row) in original_sheet.rows.iter().zip(reloaded_sheet.rows.iter())
+            {
                 assert_eq!(orig_row.len(), reload_row.len());
                 for (orig_cell, reload_cell) in orig_row.iter().zip(reload_row.iter()) {
                     match (orig_cell, reload_cell) {
                         (Some(XlsCell::Text(a)), Some(XlsCell::Text(b))) => assert_eq!(a, b),
                         (Some(XlsCell::Number(a)), Some(XlsCell::Number(b))) => assert_eq!(a, b),
                         (Some(XlsCell::Boolean(a)), Some(XlsCell::Boolean(b))) => assert_eq!(a, b),
-                        (None, None) => {}, // Both empty cells are fine
+                        (None, None) => {} // Both empty cells are fine
                         _ => panic!("Mismatched cell types or values"),
                     }
                 }
@@ -1195,5 +1082,156 @@ mod tests {
         std::fs::remove_file(temp_output_path).ok();
 
         Ok(())
+    }
+
+    #[test]
+    fn test_sst_add_string() {
+        let mut sst = SharedStringTable::new();
+
+        // 测试基本添加
+        let idx1 = sst.add("Hello".to_string());
+        assert_eq!(idx1, 0);
+
+        // 测试重复字符串
+        let idx2 = sst.add("Hello".to_string());
+        assert_eq!(idx2, 0); // 应该返回相同索引
+
+        // 测试新字符串
+        let idx3 = sst.add("World".to_string());
+        assert_eq!(idx3, 1);
+
+        assert_eq!(sst.string_count(), 2);
+        assert_eq!(sst.total_reference_count(), 3);
+    }
+
+    #[test]
+    fn test_text_cell_sst_flow() {
+        let _workbook = XlsWorkbook::new();
+        let sheet = XlsSheet::new("TestSheet".to_string());
+
+        // 手动测试 SST 添加
+        let mut sst = SharedStringTable::new();
+
+        // 调用 sheet 的 get_biff_data 看是否能正常工作
+        // 先测试 SST 本身
+        let idx1 = sst.add("Hello".to_string());
+        println!("Added 'Hello' at index {}", idx1);
+        assert_eq!(idx1, 0);
+
+        let idx2 = sst.add("World".to_string());
+        println!("Added 'World' at index {}", idx2);
+        assert_eq!(idx2, 1);
+
+        // 再添加一个 Hello 确认是同一个索引
+        let idx3 = sst.add("Hello".to_string());
+        println!("Added 'Hello' again at index {}", idx3);
+        assert_eq!(idx3, 0);
+
+        println!(
+            "SST has {} unique strings, {} total refs",
+            sst.string_count(),
+            sst.total_reference_count()
+        );
+
+        // 现在测试调用 get_biff_data
+        let _biff_data = sheet.get_biff_data(&mut sst);
+
+        println!(
+            "Sheet BIFF data generated, SST now has {} strings",
+            sst.string_count()
+        );
+    }
+
+    #[test]
+    fn test_get_biff_data_empty_workbook() {
+        let workbook = XlsWorkbook::new();
+        let biff_data = workbook.get_biff_data();
+
+        // 验证 BOF 记录
+        assert!(biff_data.len() > 4);
+        assert_eq!(biff_data[0], 0x09);
+        assert_eq!(biff_data[1], 0x08);
+    }
+
+    #[test]
+    fn test_get_biff_data_with_empty_sheet() {
+        let mut workbook = XlsWorkbook::new();
+        let sheet = XlsSheet::new("Sheet1".to_string());
+        workbook.sheets.push(sheet);
+
+        let biff_data = workbook.get_biff_data();
+        assert!(biff_data.len() > 100);
+
+        // 验证包含 BOUNDSHEET 记录 (0x85)
+        let has_boundsheet = biff_data.windows(2).any(|w| w == &[0x85, 0x00]);
+        assert!(has_boundsheet, "BIFF data should contain BOUNDSHEET record");
+
+        // 验证包含 SST 记录 (0xFC)
+        let has_sst = biff_data.windows(2).any(|w| w == &[0xFC, 0x00]);
+        assert!(has_sst, "BIFF data should contain SST record");
+
+        // 验证包含 EOF 记录 (0x0A)
+        let has_eof = biff_data.windows(2).any(|w| w == &[0x0A, 0x00]);
+        assert!(has_eof, "BIFF data should contain EOF record");
+    }
+
+    #[test]
+    fn test_get_biff_data_with_number_cell() {
+        let mut workbook = XlsWorkbook::new();
+        let mut sheet = XlsSheet::new("Sheet1".to_string());
+        sheet.set_cell(0, 0, XlsCell::Number(42.0));
+        workbook.sheets.push(sheet);
+
+        let biff_data = workbook.get_biff_data();
+        assert!(biff_data.len() > 200);
+    }
+
+    #[test]
+    fn test_write_simple_workbook() {
+        // 创建一个简单的工作簿测试
+        let mut workbook = XlsWorkbook::new();
+
+        // 创建一个包含文本的工作表
+        let mut sheet = XlsSheet::new("Sheet1".to_string());
+        sheet.set_cell(0, 0, XlsCell::Text("Hello".to_string()));
+        workbook.sheets.push(sheet);
+
+        println!("调用 get_biff_data...");
+        let data = workbook.get_biff_data();
+        println!("生成 {} 字节", data.len());
+
+        assert!(data.len() > 100);
+
+        // 验证包含 BOF
+        assert_eq!(data[0], 0x09);
+        assert_eq!(data[1], 0x08);
+    }
+
+    #[test]
+    fn test_write_to_file() {
+        let output_path = "data/test_simple_output.xls";
+
+        // 创建一个简单的工作簿
+        let mut workbook = XlsWorkbook::new();
+
+        let mut sheet = XlsSheet::new("TestSheet".to_string());
+        sheet.set_cell(0, 0, XlsCell::Text("Hello".to_string()));
+        sheet.set_cell(0, 1, XlsCell::Text("World".to_string()));
+        sheet.set_cell(1, 0, XlsCell::Number(42.0));
+        workbook.sheets.push(sheet);
+
+        println!("写入文件到 {}...", output_path);
+        workbook.write_xls(output_path).expect("写入失败");
+
+        // 验证文件存在
+        let metadata = std::fs::metadata(output_path).expect("文件不存在");
+        println!("文件大小: {} 字节", metadata.len());
+
+        assert!(metadata.len() > 0, "文件应该非空");
+
+        // 清理
+        std::fs::remove_file(output_path).ok();
+
+        println!("测试完成！");
     }
 }

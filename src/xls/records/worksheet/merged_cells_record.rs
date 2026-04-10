@@ -85,7 +85,13 @@ impl BiffRecord for MergedCellsRecord {
         if self.ranges.is_empty() {
             return Vec::new();
         }
-        BiffRecord::serialize(self)
+        let payload = self.data();
+        let len = payload.len() as u16;
+        let mut result = Vec::with_capacity(4 + payload.len());
+        result.extend_from_slice(&self.id().to_le_bytes());
+        result.extend_from_slice(&len.to_le_bytes());
+        result.extend_from_slice(&payload);
+        result
     }
 }
 
