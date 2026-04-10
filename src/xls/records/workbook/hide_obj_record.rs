@@ -10,7 +10,7 @@ use super::BiffRecord;
 /// ## 参数说明
 ///
 /// - 固定值：0x0000（默认，显示所有对象）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HideObjRecord;
 
 impl HideObjRecord {

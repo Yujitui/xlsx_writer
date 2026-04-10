@@ -6,7 +6,7 @@ use super::BiffRecord;
 ///
 /// BookBoolRecord是Excel BIFF格式中的工作簿布尔选项记录（ID: 0x00DA），
 /// 用于存储工作簿级别的某些全局选项。数据固定为0x0000。
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct BookBoolRecord;
 
 impl BookBoolRecord {

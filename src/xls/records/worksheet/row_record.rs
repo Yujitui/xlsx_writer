@@ -70,7 +70,14 @@ impl BiffRecord for RowRecord {
         if self.first_col == 0 && self.last_col == 0 {
             vec![]
         } else {
-            BiffRecord::serialize(self)
+            // Manual serialization to avoid infinite recursion
+            let payload = self.data();
+            let len = payload.len() as u16;
+            let mut result = Vec::with_capacity(4 + payload.len());
+            result.extend_from_slice(&self.id().to_le_bytes());
+            result.extend_from_slice(&len.to_le_bytes());
+            result.extend_from_slice(&payload);
+            result
         }
     }
 }
@@ -124,5 +131,14 @@ mod tests {
         let record = RowRecord::from_row_data(10, &row_data);
 
         assert_eq!(record.index, 10);
+    }
+
+    #[test]
+    fn test_row_record_serialize_simple() {
+        let row_data = vec![Some(XlsCell::Text("A".to_string()))];
+        let record = RowRecord::from_row_data(0, &row_data);
+
+        let serialized = record.serialize();
+        assert!(!serialized.is_empty());
     }
 }

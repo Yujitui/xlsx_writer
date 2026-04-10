@@ -52,6 +52,19 @@ impl BoundSheetRecord {
             sheet_name: sheet_name.to_string(),
         }
     }
+
+    pub fn new_pending(sheet_name: &str) -> Self {
+        BoundSheetRecord {
+            stream_pos: 0,
+            visibility: SheetVisibility::Visible as u8,
+            sheet_type: SheetType::Worksheet as u8,
+            sheet_name: sheet_name.to_string(),
+        }
+    }
+
+    pub fn set_offset(&mut self, offset: u32) {
+        self.stream_pos = offset;
+    }
 }
 
 impl BiffRecord for BoundSheetRecord {

@@ -42,15 +42,26 @@ pub struct XlsSheet {
     pub rows: Vec<Vec<Option<XlsCell>>>,
 }
 
+use crate::xls::records::biff_record::BiffRecord;
+use crate::xls::records::SharedStringTable;
+use crate::xls::records::{
+    row_data_to_cell_records, BottomMarginRecord, CalcCountRecord, CalcModeRecord,
+    DefaultRowHeightRecord, DeltaRecord, DimensionsRecord, FooterRecord, GridSetRecord, GutsRecord,
+    HCenterRecord, HeaderRecord, IterationRecord, LeftMarginRecord, PrintGridLinesRecord,
+    PrintHeadersRecord, RefModeRecord, RightMarginRecord, RowRecord, ScenProtectRecord,
+    SetupPageRecord, TopMarginRecord, VCenterRecord, WSBoolRecord, Window2Record,
+    WorksheetObjectProtectRecord, WorksheetProtectRecord, WorksheetWindowProtectRecord,
+};
+use crate::xls::records::{BoFRecord, BofType, EofRecord};
+
 impl XlsSheet {
-    
     pub fn new(sheet_name: String) -> XlsSheet {
         XlsSheet {
             sheet_name,
             rows: Vec::new(),
         }
     }
-    
+
     /// 获取工作表中包含数据的实际范围。
     ///
     /// 此函数分析 `rows` 向量，找出包含至少一个非空单元格的最后行和最后列，
@@ -68,10 +79,7 @@ impl XlsSheet {
         }
 
         let max_row = self.rows.len() - 1;
-        let max_col = self.rows.iter()
-            .map(|row| row.len())
-            .max()
-            .unwrap_or(0);
+        let max_col = self.rows.iter().map(|row| row.len()).max().unwrap_or(0);
 
         if max_col == 0 {
             None
@@ -93,9 +101,9 @@ impl XlsSheet {
     /// - `&XlsCell` 是指向单元格数据的引用。
     pub fn cell_iterator(&self) -> impl Iterator<Item = (usize, usize, &XlsCell)> {
         self.rows.iter().enumerate().flat_map(|(row_idx, row)| {
-            row.iter().enumerate().filter_map(move |(col_idx, cell)| {
-                cell.as_ref().map(|c| (row_idx, col_idx, c))
-            })
+            row.iter()
+                .enumerate()
+                .filter_map(move |(col_idx, cell)| cell.as_ref().map(|c| (row_idx, col_idx, c)))
         })
     }
 
@@ -118,5 +126,59 @@ impl XlsSheet {
 
         // 设置单元格值
         self.rows[row][col] = Some(cell);
+    }
+
+    /// 生成工作表的 BIFF 数据
+    ///
+    /// 此方法将工作表序列化为 BIFF8 格式的字节流
+    ///
+    /// # 参数
+    ///
+    /// * `sst` - 共享字符串表，用于存储文本单元格
+    pub fn get_biff_data(&self, sst: &mut SharedStringTable) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        result.extend_from_slice(&BoFRecord::new(BofType::Worksheet).serialize());
+
+        result.extend_from_slice(&CalcModeRecord::default().serialize());
+        result.extend_from_slice(&CalcCountRecord::default().serialize());
+        result.extend_from_slice(&RefModeRecord::default().serialize());
+        result.extend_from_slice(&DeltaRecord::default().serialize());
+        result.extend_from_slice(&IterationRecord::default().serialize());
+
+        result.extend_from_slice(&GutsRecord::default().serialize());
+        result.extend_from_slice(&DefaultRowHeightRecord::default().serialize());
+        result.extend_from_slice(&WSBoolRecord::default().serialize());
+        result.extend_from_slice(&DimensionsRecord::from(&self.rows).serialize());
+
+        result.extend_from_slice(&PrintHeadersRecord::default().serialize());
+        result.extend_from_slice(&PrintGridLinesRecord::default().serialize());
+        result.extend_from_slice(&GridSetRecord::default().serialize());
+        result.extend_from_slice(&HeaderRecord::default().serialize());
+        result.extend_from_slice(&FooterRecord::default().serialize());
+        result.extend_from_slice(&HCenterRecord::default().serialize());
+        result.extend_from_slice(&VCenterRecord::default().serialize());
+        result.extend_from_slice(&LeftMarginRecord::default().serialize());
+        result.extend_from_slice(&RightMarginRecord::default().serialize());
+        result.extend_from_slice(&TopMarginRecord::default().serialize());
+        result.extend_from_slice(&BottomMarginRecord::default().serialize());
+        result.extend_from_slice(&SetupPageRecord::default().serialize());
+
+        result.extend_from_slice(&WorksheetProtectRecord::default().serialize());
+        result.extend_from_slice(&WorksheetWindowProtectRecord::default().serialize());
+        result.extend_from_slice(&ScenProtectRecord::default().serialize());
+        result.extend_from_slice(&WorksheetObjectProtectRecord::default().serialize());
+
+        for (row_idx, row) in self.rows.iter().enumerate() {
+            if row.iter().any(|c| c.is_some()) {
+                result.extend_from_slice(&RowRecord::from_row_data(row_idx, row).serialize());
+                result.extend_from_slice(&row_data_to_cell_records(row_idx, row, 0, sst));
+            }
+        }
+
+        result.extend_from_slice(&Window2Record::default().serialize());
+        result.extend_from_slice(&EofRecord::default().serialize());
+        
+        result
     }
 }

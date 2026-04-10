@@ -1,4 +1,5 @@
 use crate::xls::records::BiffRecord;
+use crate::xls::XlsCell;
 
 /// DimensionsRecord 记录
 ///
@@ -56,6 +57,43 @@ impl Default for DimensionsRecord {
             first_used_col: 0,
             last_used_col: 0,
         }
+    }
+}
+
+impl DimensionsRecord {
+    pub fn from(data: &Vec<Vec<Option<XlsCell>>>) -> Self {
+        if data.is_empty() {
+            return DimensionsRecord::default();
+        }
+
+        let first_used_row = 0u32;
+        let last_used_row = (data.len() - 1) as u32;
+
+        let first_used_col = data
+            .iter()
+            .enumerate()
+            .flat_map(|(row_idx, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(move |(col_idx, c)| (row_idx, col_idx, c))
+            })
+            .find(|(_, _, c)| c.is_some())
+            .map(|(_, col_idx, _)| col_idx as u16)
+            .unwrap_or(0);
+
+        let last_used_col = data
+            .iter()
+            .enumerate()
+            .flat_map(|(row_idx, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(move |(col_idx, c)| (row_idx, col_idx, c))
+            })
+            .rfind(|(_, _, c)| c.is_some())
+            .map(|(_, col_idx, _)| col_idx as u16)
+            .unwrap_or(0);
+
+        DimensionsRecord::new(first_used_row, last_used_row, first_used_col, last_used_col)
     }
 }
 

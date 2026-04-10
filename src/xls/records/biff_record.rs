@@ -103,4 +103,48 @@ mod tests {
         let continue_bytes = CONTINUE_RECORD_ID.to_le_bytes();
         assert!(serialized.windows(2).any(|w| w == continue_bytes));
     }
+
+    #[test]
+    fn test_serialize_simple() {
+        println!("test_serialize_simple: starting");
+        let record = TestLargeRecord::new(10);
+        println!("test_serialize_simple: created record");
+        let result = record.serialize();
+        println!(
+            "test_serialize_simple: serialize returned {} bytes",
+            result.len()
+        );
+        assert!(result.len() > 0);
+    }
+
+    #[test]
+    fn test_serialize_with_u16_id() {
+        println!("test_serialize_with_u16_id: starting");
+
+        struct SimpleRecord {
+            id: u16,
+            data: Vec<u8>,
+        }
+
+        impl BiffRecord for SimpleRecord {
+            fn id(&self) -> u16 {
+                self.id
+            }
+            fn data(&self) -> Vec<u8> {
+                self.data.clone()
+            }
+        }
+
+        let record = SimpleRecord {
+            id: 0x0208,
+            data: vec![0; 16],
+        };
+
+        println!("test_serialize_with_u16_id: created record, calling serialize");
+        let result = record.serialize();
+        println!(
+            "test_serialize_with_u16_id: returned {} bytes",
+            result.len()
+        );
+    }
 }

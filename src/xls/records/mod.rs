@@ -10,8 +10,8 @@
 //! - `workbook`: 工作簿级记录（SST、XF、Font等）
 //! - `worksheet`: 工作表级记录（单元格、行、窗格等）
 
-mod workbook;
-mod worksheet;
+pub mod workbook;
+pub mod worksheet;
 
 pub mod biff_record;
 pub mod bof_record;

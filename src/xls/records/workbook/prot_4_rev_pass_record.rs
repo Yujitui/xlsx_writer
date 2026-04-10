@@ -10,7 +10,7 @@ use super::BiffRecord;
 /// ## 参数说明
 ///
 /// - 固定值：0x0000（无密码）
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Prot4RevPassRecord;
 
 impl Prot4RevPassRecord {

@@ -10,7 +10,7 @@ use super::BiffRecord;
 /// ## 参数说明
 ///
 /// - 固定值：0x0000（不自动刷新）
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RefreshAllRecord;
 
 impl RefreshAllRecord {

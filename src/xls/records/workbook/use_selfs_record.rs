@@ -10,7 +10,7 @@ use super::BiffRecord;
 /// ## 参数说明
 ///
 /// - 固定值：0x0001（使用!操作符解析自身引用）
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct UseSelfsRecord;
 
 impl UseSelfsRecord {
