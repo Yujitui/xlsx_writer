@@ -1,0 +1,64 @@
+{
+  "styles": {
+    "header": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 14,
+      "bold": true,
+      "bg_color": "#4472C4",
+      "font_color": "#FFFFFF",
+      "align": "center"
+    },
+    "summary_header": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 12,
+      "bold": true,
+      "bg_color": "#5B9BD5",
+      "font_color": "#FFFFFF"
+    },
+    "detail_header": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 11,
+      "bold": true,
+      "bg_color": "#B4C7DC"
+    },
+    "highlight": {
+      "bg_color": "#FFE699",
+      "bold": true
+    },
+    "warning": {
+      "bg_color": "#FF6B6B",
+      "font_color": "#FFFFFF"
+    },
+    "money": {
+      "num_format": "#,##0.00",
+      "align": "right"
+    }
+  },
+  "style_rules": [
+    {
+      "row_conditions": [{"type": "index", "criteria": [0]}],
+      "apply": {"style": "header"}
+    },
+    {
+      "row_conditions": [{"type": "index", "criteria": [1]}],
+      "apply": {"style": "summary_header"}
+    },
+    {
+      "row_conditions": [{"type": "index", "criteria": [2]}],
+      "apply": {"style": "detail_header"}
+    },
+    {
+      "row_conditions": [
+        {"type": "value_range", "targets": ["预算"], "criteria": ">50000"}
+      ],
+      "apply": {
+        "style": "default",
+        "overrides": [{"style": "highlight", "col_conditions": [{"type": "match", "targets": ["预算"], "criteria": ["预算"]}]}
+      ]
+    }
+    }
+  ],
+  "merge_rules": [
+    {"type": "fixed", "targets": [[0, 0, 0, 3]]}
+  ]
+}

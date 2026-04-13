@@ -964,11 +964,7 @@ impl ParsableRecord for FormulaRecord {
             FormulaResult::Number(value) => {
                 // 数字结果直接设置
                 let sheet = state.current_sheet_mut()?;
-                sheet.set_cell(
-                    self.row as usize,
-                    self.col as usize,
-                    Cell::Number(*value),
-                );
+                sheet.set_cell(self.row as usize, self.col as usize, Cell::Number(*value));
             }
             FormulaResult::String(_) => {
                 // 字符串结果：保存行列位置，等待 STRING 记录
@@ -1036,11 +1032,7 @@ impl ParsableRecord for StringRecord {
         // 使用上一个 FORMULA 记录保存的行列位置
         if let Some((row, col)) = state.last_formula_string_cell.take() {
             let sheet = state.current_sheet_mut()?;
-            sheet.set_cell(
-                row as usize,
-                col as usize,
-                Cell::Text(self.value.clone()),
-            );
+            sheet.set_cell(row as usize, col as usize, Cell::Text(self.value.clone()));
         }
         Ok(())
     }

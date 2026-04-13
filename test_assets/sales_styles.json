@@ -1,0 +1,57 @@
+{
+  "styles": {
+    "header": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 11,
+      "bold": true,
+      "bg_color": "#BFBFBF",
+      "align": "center",
+      "border": "thin"
+    },
+    "high_sales": {
+      "bg_color": "#FFC7CE",
+      "font_color": "#9C0006",
+      "bold": true
+    },
+    "good_performance": {
+      "font_color": "#006100",
+      "bold": true
+    },
+    "money_format": {
+      "num_format": "#,##0",
+      "align": "right"
+    },
+    "percent_format": {
+      "num_format": "0.0%",
+      "align": "center"
+    }
+  },
+  "style_rules": [
+    {
+      "row_conditions": [{"type": "index", "criteria": [0]}],
+      "apply": {"style": "header"}
+    },
+    {
+      "row_conditions": [
+        {"type": "value_range", "targets": ["Q1销售额"], "criteria": ">100000"}
+      ],
+      "apply": {
+        "style": "default",
+        "overrides": [
+          {"style": "high_sales", "col_conditions": [{"type": "match", "targets": ["Q1销售额"], "criteria": ["Q1销售额"]}]}
+        ]
+      }
+    },
+    {
+      "row_conditions": [
+        {"type": "value_range", "targets": ["完成率"], "criteria": ">=1"}
+      ],
+      "apply": {
+        "style": "default",
+        "overrides": [
+          {"style": "good_performance", "col_conditions": [{"type": "match", "targets": ["完成率"], "criteria": ["完成率"]}]}
+        ]
+      }
+    }
+  ]
+}

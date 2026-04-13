@@ -1,9 +1,8 @@
 //! Excel 工作表导出任务定义模块
 //!
 //! 本模块定义了 Excel 工作表导出的核心数据结构，包括：
-//! - WorkSheet: 单个工作表的导出任务
+//! - WorkSheet: 单个工作表的导出任务，由多个 SheetRegion 组成
 //! - 工作表名称验证机制
-//! - 数据和样式映射的统一管理
 
 use crate::cell::Cell;
 use crate::error::XlsxError;
@@ -17,10 +16,9 @@ use crate::xls_records::{
     WSBoolRecord, Window2Record, WorksheetObjectProtectRecord, WorksheetProtectRecord,
     WorksheetWindowProtectRecord,
 };
-use polars::datatypes::AnyValue;
-use polars::prelude::{DataFrame, Series};
-// Column is re-exported from polars::prelude
-use std::collections::HashMap;
+use polars::prelude::DataFrame;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Excel 工作表名称中禁止出现的特殊字符集合
 ///
@@ -37,7 +35,7 @@ const FORBIDDEN_SHEET_NAME_CHARS: [char; 7] = ['\\', '/', '?', '*', ':', '[', ']
 /// Excel 工作表导出任务描述符
 ///
 /// 封装了单个工作表导出所需的所有信息。
-/// 使用统一的 cells 数据存储，不再依赖 DataFrame。
+/// 工作表由多个 SheetRegion 组成，按顺序写入。
 #[derive(Debug)]
 pub struct WorkSheet {
     /// 工作表显示名称
@@ -45,64 +43,27 @@ pub struct WorkSheet {
     /// 在 Excel 中显示的工作表标签名称，需符合命名规范。
     pub name: String,
 
-    /// 单元格数据
+    /// 区域列表
     ///
-    /// 二维向量存储所有单元格数据。
-    /// 第 0 行是表头（列名），第 1 行开始是数据。
-    /// `None` 表示空单元格。
-    pub cells: Vec<Vec<Option<Cell>>>,
-
-    /// 列名列表
-    ///
-    /// 缓存列名，避免重复从 cells[0] 提取。
-    pub column_names: Vec<String>,
-
-    /// 单元格样式映射表（可选）
-    ///
-    /// 提供精确到单元格级别的样式控制能力，键为 (行, 列) 坐标，
-    /// 值为预定义样式池中的样式名称。
-    pub style_map: Option<HashMap<(u32, u16), std::sync::Arc<str>>>,
-
-    /// 合并单元格区域列表（可选）
-    ///
-    /// 定义需要在 Excel 中合并的单元格区域，每个元组表示一个合并区域：
-    /// `(起始行, 起始列, 结束行, 结束列)`。
-    pub merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
-
-    /// 特殊区域列表（表头、脚注等）
-    ///
-    /// 存储独立于主数据区域的特殊区域，按添加顺序写入。
-    /// Header 类型的区域显示在主数据上方，
-    /// Footer 类型的区域显示在主数据下方。
+    /// 存储工作表中的所有数据区域，按添加顺序写入。
+    /// 每个区域有唯一的名称用于标识。
     pub regions: Vec<SheetRegion>,
 }
 
 impl WorkSheet {
-    /// 主构造函数：从 cells 创建 WorkSheet
-    ///
-    /// 这是最通用的创建方式，xlsx/xls 读取都使用这个。
+    /// 创建新的工作表
     ///
     /// # 参数
-    /// * `cells` - 单元格数据（第 0 行必须是表头）
     /// * `name` - 工作表名称
-    /// * `style_map` - 可选的单元格样式映射
-    /// * `merge_ranges` - 可选的合并单元格区域列表
+    /// * `regions` - 区域列表
     ///
     /// # 返回值
     /// * `Ok(WorkSheet)` - 成功创建
-    /// * `Err(XlsxError)` - 创建失败
-    pub fn new(
-        cells: Vec<Vec<Option<Cell>>>,
-        name: String,
-        style_map: Option<HashMap<(u32, u16), std::sync::Arc<str>>>,
-        merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
-    ) -> Result<Self, XlsxError> {
-        // 1. 验证 cells
-        if cells.is_empty() || cells[0].is_empty() {
-            return Err(XlsxError::EmptyDataFrame);
-        }
+    /// * `Err(XlsxError)` - 创建失败（名称无效或区域名称重复）
+    pub fn new(name: impl Into<String>, regions: Vec<SheetRegion>) -> Result<Self, XlsxError> {
+        let name = name.into();
 
-        // 2. 名称规范性校验
+        // 1. 验证工作表名称
         let trimmed = name.trim();
         if trimmed.is_empty()
             || trimmed.chars().count() > 31
@@ -111,193 +72,137 @@ impl WorkSheet {
             return Err(XlsxError::InvalidName(name));
         }
 
-        // 3. 从第 0 行提取列名
-        let column_names: Vec<String> = cells[0]
-            .iter()
-            .map(|cell| match cell {
-                Some(Cell::Text(s)) => s.clone(),
-                _ => "Column".to_string(),
-            })
-            .collect();
-
-        // 4. 样式坐标清洗
-        let style_map = style_map.and_then(|mut map| {
-            let max_row = cells.len() as u32;
-            let max_col = column_names.len() as u16;
-
-            map.retain(|&(r, c), style_name| {
-                r < max_row && c < max_col && !style_name.trim().is_empty()
-            });
-
-            if map.is_empty() {
-                None
-            } else {
-                Some(map)
+        // 2. 验证区域名称唯一性
+        let mut name_set = HashSet::new();
+        for region in &regions {
+            if !name_set.insert(region.name.clone()) {
+                return Err(XlsxError::GenericError(format!(
+                    "Duplicate region name: {}",
+                    region.name
+                )));
             }
-        });
+        }
 
-        // 5. 合并区域清洗
-        let merge_ranges = merge_ranges.and_then(|mut ranges| {
-            let max_row = cells.len() as u32;
-            let max_col = column_names.len() as u16;
-
-            ranges.retain(|&(start_r, start_c, end_r, end_c)| {
-                start_r <= end_r && start_c <= end_c && end_r < max_row && end_c < max_col
-            });
-
-            if ranges.is_empty() {
-                None
-            } else {
-                Some(ranges)
-            }
-        });
-
-        Ok(WorkSheet {
-            name,
-            cells,
-            column_names,
-            style_map,
-            merge_ranges,
-            regions: Vec::new(),
-        })
+        Ok(WorkSheet { name, regions })
     }
 
     /// 从 DataFrame 创建 WorkSheet
     ///
-    /// 便利函数：将 DataFrame 转换为 cells，然后调用 `Self::new()`。
+    /// 创建一个包含单个区域（默认名"data"）的工作表。
     ///
     /// # 参数
-    /// * `df`: 待导出的 Polars DataFrame 数据源
-    /// * `name`: 工作表显示名称
-    /// * `style_map`: 可选的单元格样式映射
-    /// * `merge_ranges`: 可选的合并单元格区域列表
+    /// * `df` - Polars DataFrame 数据源
+    /// * `sheet_name` - 工作表显示名称
+    /// * `region_name` - 区域名称（默认为"data"）
+    /// * `style_map` - 可选的单元格样式映射
+    /// * `merge_ranges` - 可选的合并单元格区域列表
     ///
     /// # 返回值
     /// * `Ok(WorkSheet)` - 成功创建的工作表实例
     /// * `Err(XlsxError)` - 创建过程中发生的验证错误
     pub fn from_dataframe(
         df: DataFrame,
-        name: String,
-        style_map: Option<HashMap<(u32, u16), std::sync::Arc<str>>>,
+        sheet_name: impl Into<String>,
+        region_name: Option<String>,
+        style_map: Option<HashMap<(u32, u16), Arc<str>>>,
         merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
     ) -> Result<Self, XlsxError> {
-        // 1. 数据校验：拒绝空表
-        if df.height() == 0 || df.width() == 0 {
-            return Err(XlsxError::EmptyDataFrame);
-        }
+        let region_name = region_name.unwrap_or_else(|| "data".to_string());
 
-        // 2. 提取列名
-        let column_names: Vec<String> = df.columns().iter().map(|c| c.name().to_string()).collect();
+        // 使用 SheetRegion::from_dataframe 创建区域
+        let region = SheetRegion::from_dataframe(df, region_name, None, style_map, merge_ranges)?;
 
-        // 3. 转换 DataFrame 为 cells
-        let mut cells: Vec<Vec<Option<Cell>>> = Vec::new();
-
-        // 第 0 行：表头
-        cells.push(
-            column_names
-                .iter()
-                .map(|name| Some(Cell::Text(name.clone())))
-                .collect(),
-        );
-
-        // 数据行
-        for row_idx in 0..df.height() {
-            let mut row: Vec<Option<Cell>> = Vec::new();
-            for col in df.columns() {
-                let val = col.get(row_idx).map_err(|e| {
-                    XlsxError::GenericError(format!(
-                        "Failed to get value at ({}, {:?}): {}",
-                        row_idx,
-                        col.name(),
-                        e
-                    ))
-                })?;
-                row.push(Cell::from_any_value(&val));
-            }
-            cells.push(row);
-        }
-
-        // 4. 调用主构造函数
-        Self::new(cells, name, style_map, merge_ranges)
+        // 创建工作表
+        Self::new(sheet_name, vec![region])
     }
 
-    /// 转换为 DataFrame（供外部分析使用）
+    /// 根据名称获取区域的不可变引用
+    ///
+    /// # 参数
+    /// * `name` - 区域名称
     ///
     /// # 返回值
-    /// * `Ok(DataFrame)` - 成功转换
-    /// * `Err(XlsxError)` - 转换失败
-    pub fn to_dataframe(&self) -> Result<DataFrame, XlsxError> {
-        if self.cells.len() <= 1 {
-            // 只有表头，没有数据
-            return Err(XlsxError::EmptyDataFrame);
+    /// * `Some(&SheetRegion)` - 找到的区域
+    /// * `None` - 未找到
+    pub fn region(&self, name: &str) -> Option<&SheetRegion> {
+        self.regions.iter().find(|r| r.name == name)
+    }
+
+    /// 根据名称获取区域的可变引用
+    ///
+    /// # 参数
+    /// * `name` - 区域名称
+    ///
+    /// # 返回值
+    /// * `Some(&mut SheetRegion)` - 找到的区域
+    /// * `None` - 未找到
+    pub fn region_mut(&mut self, name: &str) -> Option<&mut SheetRegion> {
+        self.regions.iter_mut().find(|r| r.name == name)
+    }
+
+    /// 添加区域到工作表
+    ///
+    /// # 参数
+    /// * `region` - 要添加的区域
+    ///
+    /// # 返回值
+    /// * `Ok(())` - 添加成功
+    /// * `Err(XlsxError)` - 区域名称重复
+    pub fn add_region(&mut self, region: SheetRegion) -> Result<(), XlsxError> {
+        // 检查名称唯一性
+        if self.regions.iter().any(|r| r.name == region.name) {
+            return Err(XlsxError::GenericError(format!(
+                "Region name '{}' already exists",
+                region.name
+            )));
         }
 
-        let mut series_vec: Vec<Series> = Vec::new();
-
-        for (col_idx, col_name) in self.column_names.iter().enumerate() {
-            let mut data: Vec<AnyValue> = Vec::new();
-
-            // 从第 1 行开始（跳过表头）
-            for row_idx in 1..self.cells.len() {
-                let cell = self.cells[row_idx]
-                    .get(col_idx)
-                    .and_then(|opt| opt.as_ref());
-                let any_val = match cell {
-                    Some(Cell::Text(s)) => AnyValue::StringOwned(s.clone().into()),
-                    Some(Cell::Number(n)) => AnyValue::Float64(*n),
-                    Some(Cell::Boolean(b)) => AnyValue::Boolean(*b),
-                    None => AnyValue::Null,
-                };
-                data.push(any_val);
-            }
-
-            let series = Series::from_any_values(col_name.as_str().into(), &data, true)
-                .map_err(|e| XlsxError::GenericError(format!("创建 Series 失败: {}", e)))?;
-            series_vec.push(series);
-        }
-
-        // 将 Series 转换为 Columns
-        let columns: Vec<polars::prelude::Column> =
-            series_vec.into_iter().map(|s| s.into()).collect();
-        DataFrame::new(columns[0].len(), columns)
-            .map_err(|e| XlsxError::GenericError(format!("创建 DataFrame 失败: {}", e)))
-    }
-
-    /// 获取数据行数（不含表头）
-    pub fn data_row_count(&self) -> usize {
-        self.cells.len().saturating_sub(1)
-    }
-
-    /// 获取列数
-    pub fn col_count(&self) -> usize {
-        self.column_names.len()
-    }
-
-    /// 添加特殊区域到工作表
-    pub fn add_region(&mut self, region: SheetRegion) {
         self.regions.push(region);
+        Ok(())
     }
 
-    /// 获取所有 Header 类型的区域
+    /// 获取所有区域的总行数
+    ///
+    /// 计算所有区域行数的总和。
+    pub fn total_row_count(&self) -> usize {
+        self.regions.iter().map(|r| r.row_count()).sum()
+    }
+
+    /// 获取所有区域的最大列数
+    ///
+    /// 找出所有区域中列数的最大值。
+    pub fn max_col_count(&self) -> usize {
+        self.regions
+            .iter()
+            .map(|r| r.col_count())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// 获取名称包含 "header" 的区域
+    ///
+    /// 根据区域名称过滤，返回名称中包含 "header"（不区分大小写）的区域。
     pub fn header_regions(&self) -> Vec<&SheetRegion> {
         self.regions
             .iter()
-            .filter(|r| matches!(r.region_type, crate::sheet_region::RegionType::Header))
+            .filter(|r| r.name.to_lowercase().contains("header"))
             .collect()
     }
 
-    /// 获取所有 Footer 类型的区域
+    /// 获取名称包含 "footer" 的区域
+    ///
+    /// 根据区域名称过滤，返回名称中包含 "footer"（不区分大小写）的区域。
     pub fn footer_regions(&self) -> Vec<&SheetRegion> {
         self.regions
             .iter()
-            .filter(|r| matches!(r.region_type, crate::sheet_region::RegionType::Footer))
+            .filter(|r| r.name.to_lowercase().contains("footer"))
             .collect()
     }
 
     /// 生成 BIFF8 数据（用于 .xls 写入）
     ///
     /// 此方法将工作表序列化为 BIFF8 格式的字节流。
-    /// 从 XlsSheet::get_biff_data 平移。
+    /// 所有区域按顺序写入，坐标会自动进行偏移处理。
     ///
     /// # 参数
     /// * `sst` - 共享字符串表，用于存储文本单元格
@@ -318,7 +223,18 @@ impl WorkSheet {
         result.extend_from_slice(&GutsRecord::default().serialize());
         result.extend_from_slice(&DefaultRowHeightRecord::default().serialize());
         result.extend_from_slice(&WSBoolRecord::default().serialize());
-        result.extend_from_slice(&DimensionsRecord::from(&self.cells).serialize());
+
+        // 计算总行列数用于 DimensionsRecord
+        let total_rows = self.total_row_count();
+        let max_cols = self.max_col_count();
+
+        // 创建 DimensionsRecord（总范围从 0,0 到最后一个行列）
+        let dimensions = if total_rows > 0 && max_cols > 0 {
+            DimensionsRecord::new(0, (total_rows - 1) as u32, 0, (max_cols - 1) as u16)
+        } else {
+            DimensionsRecord::default()
+        };
+        result.extend_from_slice(&dimensions.serialize());
 
         result.extend_from_slice(&PrintHeadersRecord::default().serialize());
         result.extend_from_slice(&PrintGridLinesRecord::default().serialize());
@@ -338,11 +254,24 @@ impl WorkSheet {
         result.extend_from_slice(&ScenProtectRecord::default().serialize());
         result.extend_from_slice(&WorksheetObjectProtectRecord::default().serialize());
 
-        for (row_idx, row) in self.cells.iter().enumerate() {
-            if row.iter().any(|c| c.is_some()) {
-                result.extend_from_slice(&RowRecord::from_row_data(row_idx, row).serialize());
-                result.extend_from_slice(&row_data_to_cell_records(row_idx, row, 0, sst));
+        // 写入所有区域的数据，处理坐标偏移
+        let mut current_row_offset: u32 = 0;
+        for region in &self.regions {
+            for (rel_row_idx, row) in region.data.iter().enumerate() {
+                if row.iter().any(|c| c.is_some()) {
+                    let abs_row = current_row_offset + rel_row_idx as u32;
+                    result.extend_from_slice(
+                        &RowRecord::from_row_data(abs_row as usize, row).serialize(),
+                    );
+                    result.extend_from_slice(&row_data_to_cell_records(
+                        abs_row as usize,
+                        row,
+                        0,
+                        sst,
+                    ));
+                }
             }
+            current_row_offset += region.row_count() as u32;
         }
 
         result.extend_from_slice(&Window2Record::default().serialize());
@@ -356,45 +285,154 @@ impl WorkSheet {
 mod tests {
     use super::*;
     use polars::prelude::NamedFrom;
+    use polars::prelude::Series;
+
+    #[test]
+    fn test_worksheet_new() {
+        let region = SheetRegion::new("data", vec![vec![Some(Cell::Text("Test".to_string()))]]);
+        let sheet = WorkSheet::new("TestSheet", vec![region]).unwrap();
+
+        assert_eq!(sheet.name, "TestSheet");
+        assert_eq!(sheet.regions.len(), 1);
+    }
+
+    #[test]
+    fn test_worksheet_name_validation() {
+        // 空名称
+        let region = SheetRegion::new("data", vec![vec![Some(Cell::Text("Test".to_string()))]]);
+        let result = WorkSheet::new("", vec![region.clone()]);
+        assert!(result.is_err());
+
+        // 超过31字符
+        let long_name = "a".repeat(32);
+        let result = WorkSheet::new(long_name, vec![region.clone()]);
+        assert!(result.is_err());
+
+        // 包含非法字符
+        let result = WorkSheet::new("Test/Sheet", vec![region.clone()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_worksheet_duplicate_region_name() {
+        let region1 = SheetRegion::new("data", vec![vec![Some(Cell::Text("Test1".to_string()))]]);
+        let region2 = SheetRegion::new("data", vec![vec![Some(Cell::Text("Test2".to_string()))]]);
+        let result = WorkSheet::new("TestSheet", vec![region1, region2]);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_worksheet_from_dataframe() {
-        use polars::frame::column::Column;
-        let columns: Vec<Column> = vec![
+        let columns: Vec<polars::frame::column::Column> = vec![
             Series::new("Name".into(), vec!["Alice", "Bob"]).into(),
             Series::new("Age".into(), vec![30_i64, 25]).into(),
         ];
         let df = DataFrame::new(2, columns).unwrap();
 
-        let sheet = WorkSheet::from_dataframe(df, "Test".to_string(), None, None).unwrap();
+        let sheet = WorkSheet::from_dataframe(df, "Test", None, None, None).unwrap();
 
         assert_eq!(sheet.name, "Test");
-        assert_eq!(sheet.data_row_count(), 2);
-        assert_eq!(sheet.col_count(), 2);
-        assert_eq!(sheet.column_names, vec!["Name", "Age"]);
+        assert_eq!(sheet.regions.len(), 1);
+        assert_eq!(sheet.regions[0].name, "data");
+        assert_eq!(sheet.total_row_count(), 3); // 1 header + 2 data rows
     }
 
     #[test]
-    fn test_worksheet_to_dataframe() {
-        let cells = vec![
-            vec![
-                Some(Cell::Text("Name".to_string())),
-                Some(Cell::Text("Age".to_string())),
-            ],
-            vec![
-                Some(Cell::Text("Alice".to_string())),
-                Some(Cell::Number(30.0)),
-            ],
-            vec![
-                Some(Cell::Text("Bob".to_string())),
-                Some(Cell::Number(25.0)),
-            ],
-        ];
+    fn test_worksheet_region_access() {
+        let region1 =
+            SheetRegion::new("header", vec![vec![Some(Cell::Text("Header".to_string()))]]);
+        let region2 = SheetRegion::new("data", vec![vec![Some(Cell::Text("Data".to_string()))]]);
+        let sheet = WorkSheet::new("TestSheet", vec![region1, region2]).unwrap();
 
-        let sheet = WorkSheet::new(cells, "Test".to_string(), None, None).unwrap();
-        let df = sheet.to_dataframe().unwrap();
+        // 测试 region()
+        assert!(sheet.region("header").is_some());
+        assert!(sheet.region("data").is_some());
+        assert!(sheet.region("nonexistent").is_none());
 
-        assert_eq!(df.height(), 2);
-        assert_eq!(df.width(), 2);
+        // 测试 region_mut()
+        let mut sheet_mut = sheet;
+        assert!(sheet_mut.region_mut("header").is_some());
+    }
+
+    #[test]
+    fn test_worksheet_add_region() {
+        let region1 = SheetRegion::new("data1", vec![vec![Some(Cell::Text("Test1".to_string()))]]);
+        let mut sheet = WorkSheet::new("TestSheet", vec![region1]).unwrap();
+
+        let region2 = SheetRegion::new("data2", vec![vec![Some(Cell::Text("Test2".to_string()))]]);
+        assert!(sheet.add_region(region2).is_ok());
+        assert_eq!(sheet.regions.len(), 2);
+
+        // 添加重复名称应该失败
+        let region3 = SheetRegion::new("data1", vec![vec![Some(Cell::Text("Test3".to_string()))]]);
+        assert!(sheet.add_region(region3).is_err());
+    }
+
+    #[test]
+    fn test_worksheet_total_row_count() {
+        let region1 = SheetRegion::new(
+            "r1",
+            vec![
+                vec![Some(Cell::Text("H1".to_string()))],
+                vec![Some(Cell::Text("D1".to_string()))],
+            ],
+        );
+        let region2 = SheetRegion::new(
+            "r2",
+            vec![
+                vec![Some(Cell::Text("H2".to_string()))],
+                vec![Some(Cell::Text("D2".to_string()))],
+                vec![Some(Cell::Text("D3".to_string()))],
+            ],
+        );
+        let sheet = WorkSheet::new("TestSheet", vec![region1, region2]).unwrap();
+
+        assert_eq!(sheet.total_row_count(), 5);
+    }
+
+    #[test]
+    fn test_worksheet_max_col_count() {
+        let region1 = SheetRegion::new(
+            "r1",
+            vec![vec![
+                Some(Cell::Text("A".to_string())),
+                Some(Cell::Text("B".to_string())),
+            ]],
+        );
+        let region2 = SheetRegion::new(
+            "r2",
+            vec![vec![
+                Some(Cell::Text("A".to_string())),
+                Some(Cell::Text("B".to_string())),
+                Some(Cell::Text("C".to_string())),
+            ]],
+        );
+        let sheet = WorkSheet::new("TestSheet", vec![region1, region2]).unwrap();
+
+        assert_eq!(sheet.max_col_count(), 3);
+    }
+
+    #[test]
+    fn test_worksheet_header_footer_regions() {
+        let header_region = SheetRegion::new(
+            "my_header",
+            vec![vec![Some(Cell::Text("Header".to_string()))]],
+        );
+        let data_region =
+            SheetRegion::new("data", vec![vec![Some(Cell::Text("Data".to_string()))]]);
+        let footer_region = SheetRegion::new(
+            "my_footer",
+            vec![vec![Some(Cell::Text("Footer".to_string()))]],
+        );
+        let sheet =
+            WorkSheet::new("TestSheet", vec![header_region, data_region, footer_region]).unwrap();
+
+        let headers = sheet.header_regions();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].name, "my_header");
+
+        let footers = sheet.footer_regions();
+        assert_eq!(footers.len(), 1);
+        assert_eq!(footers[0].name, "my_footer");
     }
 }

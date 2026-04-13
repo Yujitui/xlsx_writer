@@ -10,6 +10,78 @@
 - **🔗 自动合并区域**：支持纵向、横向自动合并，以及静态坐标合并
 - **💾 双格式支持**：同时支持现代 .xlsx 格式和旧版 .xls (Excel 97-2003) 格式
 - **🖥️ 跨平台字体**：自动适配 Windows（微软雅黑）和 macOS（苹方）的中文字体
+- **🧩 多区域支持**：单个工作表支持多个独立数据区域，灵活组合复杂报表
+
+## 📚 核心概念
+
+### 工作表区域（SheetRegion）
+
+**SheetRegion** 是数据导出的最小单元，包含：
+- **数据**：二维单元格数组
+- **样式映射**：单元格坐标 → 样式名称
+- **合并区域**：需要合并的单元格范围
+
+**Region 本身不预设数据结构**，第0行可以是表头、数据或任何内容。
+
+```rust
+use xlsx_writer::{Cell, SheetRegion};
+
+// 手动创建：完全自由的结构
+let region = SheetRegion::new("data", vec![
+    vec![Some(Cell::Text("标题".into()))],  // 第0行
+    vec![Some(Cell::Text("内容".into()))],  // 第1行
+]);
+
+// 从 DataFrame 创建：第0行自动使用列名作为表头
+let region = SheetRegion::from_dataframe(
+    df,
+    "sales_data",
+    Some(true),             // include_header: 是否将列名作为第0行
+    Some(style_map),        // 样式映射
+    Some(merge_ranges),     // 合并区域
+)?;
+```
+
+### 坐标系统
+
+**所有坐标都是 0-based**，从 Region 的左上角 (0, 0) 开始：
+
+```
+    col=0    col=1    col=2
+row=0  [A]      [B]      [C]
+row=1  [D]      [E]      [F]
+row=2  [G]      [H]      [I]
+```
+
+### Factory 的坐标约定
+
+**StyleFactory** 和 **MergeFactory** 基于 DataFrame 生成规则时，使用以下约定：
+
+| Factory 坐标 | 对应 Region 行 | 说明 |
+|-------------|---------------|------|
+| row=0 | 第0行 | 预留为表头行 |
+| row=1 | 第1行 | DataFrame 第0行数据 |
+| row=2 | 第2行 | DataFrame 第1行数据 |
+| ... | ... | ... |
+
+**当 `include_header=false` 时**：
+- Region 的第0行直接是数据（跳过列名）
+- Factory 生成的坐标自动调整：row=1→row=0, row=2→row=1...
+- row=0（原表头样式）被删除
+
+### 多区域工作表
+
+一个工作表可以包含多个 SheetRegion，按顺序排列写入 Excel：
+
+```rust
+let sheet = WorkSheet::new("报表", vec![
+    title_region,    // Region 1
+    data_region,     // Region 2  
+    footer_region,   // Region 3
+])?;
+```
+
+---
 
 ## 🚀 快速开始
 
@@ -24,10 +96,11 @@ polars = { version = "0.53.0", features = ["lazy", "dtype-full"] }
 serde_json = "1.0"
 ```
 
-### 基础示例
+### 基础示例（多区域）
 
 ```rust
 use xlsx_writer::prelude::*;
+use xlsx_writer::{Cell, SheetRegion};
 use polars::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,9 +111,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "薪资" => &[15000.0, 18000.0, 12000.0, 14000.0]
     )?;
 
-    // 2. 创建并保存工作簿
+    // 2. 创建区域
+    let region = SheetRegion::from_dataframe(
+        df,
+        "data",
+        Some(true),     // 包含表头
+        None,           // 无自定义样式
+        None,           // 无合并
+    )?;
+
+    // 3. 创建并保存工作簿
     Workbook::new()?
-        .insert(df, Some("工资表".into()), None, None)?
+        .add_sheet(WorkSheet::new("工资表", vec![region])?)
         .save("output.xlsx")?;
 
     Ok(())
@@ -108,7 +190,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-### 2. 样式规则详解
+### 2. 区域样式管理
+
+SheetRegion 提供完整的样式管理方法：
+
+```rust
+// 设置单个单元格样式
+region.set_style(0, 0, "header");      // 第0行第0列
+region.set_style(1, 2, "highlight");   // 第1行第2列
+
+// 批量设置
+region.set_row_style(0, "header");     // 整行
+region.set_col_style(2, "money");      // 整列
+
+// 清除样式
+region.clear_style(0, 0);              // 清除单元格
+region.clear_all_styles();             // 清除全部
+
+// 查询样式
+if let Some(style) = region.get_style(1, 2) {
+    println!("样式: {}", style);
+}
+
+// 获取所有样式（调试）
+println!("{}", region.visualize());
+```
+
+---
+
+### 3. 区域合并管理
+
+```rust
+// 添加合并区域
+region.add_merge(0, 0, 0, 3);          // 合并第0行的0-3列
+
+// 批量添加（如从 Factory 生成）
+region = region.with_merge_ranges(vec![
+    (1, 0, 3, 0),  // 华东合并
+    (4, 0, 5, 0),  // 华北合并
+]);
+
+// 查询合并
+if region.is_merged(1, 0) {
+    let merge = region.get_merge(1, 0);
+    println!("合并区域: {:?}", merge);
+}
+
+// 清除合并
+region.clear_merge_at(1, 0);           // 删除包含(1,0)的合并
+region.clear_all_merges();             // 清除全部
+```
+
+---
+
+### 5. 样式规则详解
 
 样式规则支持多种条件类型，可以精确控制单元格样式：
 
@@ -148,7 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-### 3. 合并规则详解
+### 6. 合并规则详解
 
 自动计算并生成 Excel 合并区域：
 
@@ -164,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-### 4. 样式库定义
+### 7. 样式库定义
 
 样式库支持完整的 Excel 样式属性：
 
@@ -201,7 +336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-### 5. 读取 Excel 文件
+### 8. 读取 Excel 文件
 
 支持读取 .xlsx 和 .xls 格式：
 
@@ -237,7 +372,38 @@ ReadSheet {
 
 ---
 
-### 6. 双格式保存
+### 9. 复杂多区域报表
+
+创建包含多个 Sheet、多个 Region 的复杂报表：
+
+```rust
+// Sheet 1: 综合报表
+let title = SheetRegion::new("title", vec![vec![
+    Some(Cell::Text("年度报表".into()))
+]]).with_merge_ranges(vec![(0, 0, 0, 5)]);
+
+let summary = SheetRegion::from_dataframe(summary_df, "summary", None, None, None)?;
+let detail = SheetRegion::from_dataframe(detail_df, "detail", None, Some(styles), Some(merges))?;
+
+let sheet1 = WorkSheet::new("综合报表", vec![title, summary, detail])?;
+
+// Sheet 2: 部门统计
+let dept = SheetRegion::from_dataframe(dept_df, "dept", None, None, Some(merges))?;
+let note = SheetRegion::new("note", vec![vec![Some(Cell::Text("备注".into()))]]);
+
+let sheet2 = WorkSheet::new("部门统计", vec![dept, note])?;
+
+// 保存多 Sheet 工作簿
+Workbook::new()?
+    .with_library_from_json(&styles)?
+    .add_sheet(sheet1)
+    .add_sheet(sheet2)
+    .save("complex_report.xlsx")?;
+```
+
+---
+
+### 10. 双格式保存
 
 根据文件扩展名自动选择格式：
 
@@ -325,21 +491,31 @@ workbook.save("output.xls")?;
 
 ## ⚠️ 注意事项
 
-1. **Sheet 名称限制**：
+1. **坐标系统**：
+   - 所有样式和合并的坐标都是 **0-based**
+   - Region 本身不预设第0行的属性（可以是表头、数据或任何内容）
+   - 当 `include_header=false` 时，Factory 生成的坐标自动调整（row=1→row=0）
+
+2. **Sheet 名称限制**：
    - 最大 31 个字符
    - 不能包含 `\ / ? * : [ ]` 字符
    - 非法名称会自动回退为 "Sheet N" 格式
 
-2. **.xls 格式限制**：
+3. **.xls 格式限制**：
    - 仅保留数据，不保留样式
    - 行数限制为 65536 行
    - 列数限制为 256 列
 
-3. **依赖版本**：
+4. **Factory 生成规则**：
+   - StyleFactory/MergeFactory 生成的坐标基于"表头+数据"坐标系统
+   - row=0 对应表头，row=1 对应 DataFrame 第0行数据
+   - 不需要表头时，row=0 的样式自动失效
+
+5. **依赖版本**：
    - Polars 版本需与库保持一致（0.53.0）
    - 建议在 `Cargo.lock` 中锁定版本
 
-4. **内存使用**：
+6. **内存使用**：
    - 大型 DataFrame 建议分片处理
    - 样式映射使用 `Arc<str>` 共享内存，减少重复分配
 

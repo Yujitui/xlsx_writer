@@ -8,6 +8,7 @@ use crate::cell::Cell;
 use crate::error::XlsxError;
 use crate::merge_factory::MergeFactory;
 use crate::prelude::ReadSheet;
+use crate::sheet_region::SheetRegion;
 use crate::style_factory::StyleFactory;
 use crate::style_library::StyleLibrary;
 use crate::worksheet::WorkSheet;
@@ -90,9 +91,9 @@ impl Workbook {
         self.sheets.iter_mut().find(|sheet| sheet.name == name)
     }
 
-    /// 按索引获取工作表的样式映射（简化版）
+    /// 按索引获取工作表第一个区域的样式映射（简化版）
     ///
-    /// 返回样式映射的直接引用，如果工作表不存在则返回 None。
+    /// 返回第一个区域样式映射的直接引用，如果工作表不存在或没有区域则返回 None。
     ///
     /// # 参数
     /// * `index` - 工作表索引
@@ -103,7 +104,8 @@ impl Workbook {
     pub fn style_map(&self, index: usize) -> Option<&HashMap<(u32, u16), Arc<str>>> {
         self.sheets
             .get(index)
-            .and_then(|sheet| sheet.style_map.as_ref())
+            .and_then(|sheet| sheet.regions.first())
+            .and_then(|region| region.styles())
     }
 }
 
@@ -156,6 +158,20 @@ impl Workbook {
             styles,
             sheets: vec![],
         })
+    }
+
+    /// 直接添加工作表到工作簿
+    ///
+    /// 用于已经构造好 WorkSheet 的场景（如多区域复杂报表）。
+    ///
+    /// # 参数
+    /// * `sheet` - 要添加的工作表
+    ///
+    /// # 返回值
+    /// 返回当前 Workbook 实例，便于链式调用
+    pub fn add_sheet(mut self, sheet: WorkSheet) -> Self {
+        self.sheets.push(sheet);
+        self
     }
 
     // ============================================================================
@@ -233,6 +249,7 @@ impl Workbook {
             .collect()
     }
 
+    //noinspection DuplicatedCode
     /// 尝试读取为 .xlsx 格式
     fn try_read_as_xlsx(&mut self, path: &str, read_sheets: &Vec<ReadSheet>) -> Result<(), String> {
         use calamine::Data;
@@ -343,7 +360,9 @@ impl Workbook {
                     cells.push(cell_row);
                 }
 
-                WorkSheet::new(cells, sheet_config.sheet_name.clone(), None, None)
+                // 创建默认 "data" 区域
+                let region = SheetRegion::new("data", cells);
+                WorkSheet::new(sheet_config.sheet_name.clone(), vec![region])
             })();
 
             match result {
@@ -363,83 +382,11 @@ impl Workbook {
         Ok(())
     }
 
-    /// 将特殊区域写入 worksheet
-    ///
-    /// # 参数
-    /// * `worksheet` - 目标工作表
-    /// * `region` - 要写入的特殊区域
-    /// * `start_row` - 起始行号
-    /// * `fallback_fmt` - 默认样式
-    ///
-    /// # 返回值
-    /// 返回写入后的下一行号
-    fn write_region_to_worksheet(
-        &self,
-        worksheet: &mut Worksheet,
-        region: &crate::sheet_region::SheetRegion,
-        start_row: u32,
-        fallback_fmt: &Format,
-    ) -> Result<u32, Box<dyn Error>> {
-        let default_fmt = self.styles.get("default");
-        let mut current_row = start_row;
-
-        // 写入区域数据
-        for (rel_row, row_data) in region.data.iter().enumerate() {
-            for (rel_col, cell_opt) in row_data.iter().enumerate() {
-                let r = start_row + rel_row as u32;
-                let c = rel_col as u16;
-
-                // 获取单元格样式
-                let cell_fmt = region
-                    .style_map
-                    .as_ref()
-                    .and_then(|m| m.get(&(rel_row as u32, c)))
-                    .and_then(|name| self.styles.get(name.as_ref()))
-                    .or(default_fmt)
-                    .unwrap_or(fallback_fmt);
-
-                // 写入单元格
-                if let Some(cell) = cell_opt {
-                    match cell {
-                        crate::Cell::Text(s) => {
-                            worksheet.write_with_format(r, c, s.as_str(), cell_fmt)?;
-                        }
-                        crate::Cell::Number(n) => {
-                            worksheet.write_number_with_format(r, c, *n, cell_fmt)?;
-                        }
-                        crate::Cell::Boolean(b) => {
-                            worksheet.write_boolean_with_format(r, c, *b, cell_fmt)?;
-                        }
-                    }
-                } else {
-                    // 空单元格，写入 blank 保持样式
-                    worksheet.write_blank(r, c, cell_fmt)?;
-                }
-            }
-            current_row = start_row + rel_row as u32 + 1;
-        }
-
-        // 处理合并区域
-        if let Some(ref merge_ranges) = region.merge_ranges {
-            for merge_range in merge_ranges {
-                worksheet.merge_range(
-                    start_row + merge_range.0, // first_row
-                    merge_range.1,             // first_col
-                    start_row + merge_range.2, // last_row
-                    merge_range.3,             // last_col
-                    "",                        // 数据为空白字符串
-                    fallback_fmt,              // 使用默认样式
-                )?;
-            }
-        }
-
-        Ok(current_row)
-    }
-
     // ------------------------------------------------------------------------
     // XLS 格式专用方法（BIFF8）
     // ------------------------------------------------------------------------
 
+    //noinspection DuplicatedCode
     /// 尝试读取为 .xls 格式
     fn try_read_as_xls(&mut self, path: &str, read_sheets: &Vec<ReadSheet>) -> Result<(), String> {
         use cfb::CompoundFile;
@@ -528,7 +475,7 @@ impl Workbook {
     ) -> Result<
         (
             Vec<String>,
-            Vec<Vec<Vec<Option<crate::Cell>>>>,
+            Vec<Vec<Vec<Option<Cell>>>>,
             crate::xls_records::SharedStringTable,
         ),
         String,
@@ -659,7 +606,7 @@ impl Workbook {
 
         // 提取工作表名称和行数据
         let sheet_names = state.sheet_names;
-        let sheets_data: Vec<Vec<Vec<Option<crate::Cell>>>> =
+        let sheets_data: Vec<Vec<Vec<Option<Cell>>>> =
             state.sheets.into_iter().map(|sheet| sheet.rows).collect();
 
         Ok((sheet_names, sheets_data, state.sst))
@@ -668,24 +615,24 @@ impl Workbook {
     /// 将 XLS 行数据转换为 WorkSheet
     fn convert_to_worksheet(
         sheet_name: &str,
-        rows: &[Vec<Option<crate::Cell>>],
+        rows: &[Vec<Option<Cell>>],
         read_sheet: Option<&ReadSheet>,
         _sst: &crate::xls_records::SharedStringTable,
-    ) -> Result<WorkSheet, crate::error::XlsxError> {
+    ) -> Result<WorkSheet, XlsxError> {
         use crate::cell::Cell;
 
         let skip_rows = read_sheet.and_then(|r| r.skip_rows).unwrap_or(0);
 
         // 检查是否有足够的数据
         if rows.len() <= skip_rows + 1 {
-            return Err(crate::error::XlsxError::EmptyDataFrame);
+            return Err(XlsxError::EmptyDataFrame);
         }
 
         let header_row_idx = skip_rows;
         let max_cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
 
         if max_cols == 0 {
-            return Err(crate::error::XlsxError::EmptyDataFrame);
+            return Err(XlsxError::EmptyDataFrame);
         }
 
         // 构建 cells
@@ -693,16 +640,15 @@ impl Workbook {
 
         // 表头行
         let header_row = &rows[header_row_idx];
-        let mut used_names: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+        let mut used_names: HashMap<String, usize> = HashMap::new();
 
         let header_cells: Vec<Option<Cell>> = (0..max_cols)
             .map(|col_idx| {
                 let base_name = if let Some(Some(cell)) = header_row.get(col_idx) {
                     match cell {
-                        crate::Cell::Text(s) if !s.is_empty() => s.clone(),
-                        crate::Cell::Number(n) => n.to_string(),
-                        crate::Cell::Boolean(b) => b.to_string(),
+                        Cell::Text(s) if !s.is_empty() => s.clone(),
+                        Cell::Number(n) => n.to_string(),
+                        Cell::Boolean(b) => b.to_string(),
                         _ => format!("Column_{}", col_idx),
                     }
                 } else {
@@ -730,16 +676,18 @@ impl Workbook {
                     row.get(col_idx)
                         .and_then(|opt| opt.as_ref())
                         .map(|cell| match cell {
-                            crate::Cell::Text(s) => Cell::Text(s.clone()),
-                            crate::Cell::Number(n) => Cell::Number(*n),
-                            crate::Cell::Boolean(b) => Cell::Boolean(*b),
+                            Cell::Text(s) => Cell::Text(s.clone()),
+                            Cell::Number(n) => Cell::Number(*n),
+                            Cell::Boolean(b) => Cell::Boolean(*b),
                         })
                 })
                 .collect();
             cells.push(cell_row);
         }
 
-        WorkSheet::new(cells, sheet_name.to_string(), None, None)
+        // 创建默认 "data" 区域
+        let region = SheetRegion::new("data", cells);
+        WorkSheet::new(sheet_name.to_string(), vec![region])
     }
 
     /// 注册或更新工作簿中的样式定义
@@ -866,6 +814,7 @@ impl Workbook {
         let task = match WorkSheet::from_dataframe(
             df.clone(),
             final_name.clone(),
+            None, // 使用默认区域名称 "data"
             style_map.clone(),
             merge_ranges.clone(),
         ) {
@@ -879,7 +828,7 @@ impl Workbook {
                 // 使用默认名称重新尝试创建工作表
                 let fallback_name = get_default_name(self.sheets.len());
                 // 再次調用 from_dataframe，此時使用安全名稱（已知 df 不為空，所以這次一定會 Ok）
-                WorkSheet::from_dataframe(df, fallback_name, style_map, merge_ranges)?
+                WorkSheet::from_dataframe(df, fallback_name, None, style_map, merge_ranges)?
             }
             // 其他嚴重錯誤：直接包裝並向上拋出
             // 保留原始错误信息，便于问题诊断
@@ -894,10 +843,13 @@ impl Workbook {
 
         // 5. 樣式名存在性檢查：
         // 確保數據在寫入時能找到對應的格式定義，防止 save 時出現懸空引用。
-        if let Some(ref map) = task.style_map {
-            for style_name in map.values() {
-                if !self.styles.contains_key(style_name.as_ref()) {
-                    return Err(Box::new(XlsxError::UnknownStyle(style_name.clone())));
+        // 检查所有区域的样式映射
+        for region in &task.regions {
+            if let Some(map) = region.styles() {
+                for style_name in map.values() {
+                    if !self.styles.contains_key(style_name.as_ref()) {
+                        return Err(Box::new(XlsxError::UnknownStyle(style_name.clone())));
+                    }
                 }
             }
         }
@@ -1266,6 +1218,16 @@ impl Workbook {
     /// # 返回值
     /// * `Ok(())` - 保存成功
     /// * `Err(Box<dyn Error>)` - 保存失败
+    /// 将工作簿保存为 .xlsx 格式（Excel 2007+）
+    ///
+    /// 保留所有样式信息。按顺序写入所有区域的數據，支持多區域結構。
+    ///
+    /// # 参数
+    /// * `path`: 目标文件路径
+    ///
+    /// # 返回值
+    /// * `Ok(())` - 保存成功
+    /// * `Err(Box<dyn Error>)` - 保存失败
     fn save_as_xlsx(&self, path: &str) -> Result<(), Box<dyn Error>> {
         // 创建新的 Excel 工作簿实例，作为导出的目标容器
         let mut workbook = rust_xlsxwriter::Workbook::new();
@@ -1283,96 +1245,99 @@ impl Workbook {
             // 设置工作表名称，支持中文和特殊字符（会进行验证）
             worksheet.set_name(sheet.name.as_str())?;
 
-            // --- 0. 處理 Header 特殊區域 ---
-            let mut current_row: u32 = 0;
+            // --- 步骤1: 收集所有 merge 的完整信息（绝对坐标 + 左上角内容 + 格式） ---
+            let mut merge_list: Vec<(u32, u16, u32, u16, String, &Format)> = Vec::new();
+            let mut row_offset: u32 = 0;
+
             for region in &sheet.regions {
-                if matches!(region.region_type, crate::sheet_region::RegionType::Header) {
-                    current_row = self.write_region_to_worksheet(
-                        worksheet,
-                        region,
-                        current_row,
-                        &fallback_fmt,
-                    )?;
-                }
-            }
+                if let Some(merges) = region.merges() {
+                    for (rel_start_row, start_col, rel_end_row, end_col) in merges {
+                        let abs_start_row = row_offset + rel_start_row;
+                        let abs_end_row = row_offset + rel_end_row;
 
-            // 计算主数据的起始行
-            let data_start_row = current_row;
+                        // 获取左上角单元格内容
+                        let content = region
+                            .data
+                            .get(*rel_start_row as usize)
+                            .and_then(|row| row.get(*start_col as usize))
+                            .and_then(|cell| cell.as_ref())
+                            .map(|c| c.to_string())
+                            .unwrap_or_default();
 
-            // 在写入数据前先应用合并区域（注意：合并区域坐标是相对于主数据区域的）
-            if let Some(merge_ranges) = &sheet.merge_ranges {
-                for merge_range in merge_ranges {
-                    worksheet.merge_range(
-                        data_start_row + merge_range.0, // first_row（加上偏移）
-                        merge_range.1,                  // first_col
-                        data_start_row + merge_range.2, // last_row（加上偏移）
-                        merge_range.3,                  // last_col
-                        "",                             // 数据为空白字符串
-                        &fallback_fmt,                  // 使用标准样式保持一致性
-                    )?;
-                }
-            }
+                        // 获取左上角单元格格式
+                        let style = region
+                            .get_style(*rel_start_row, *start_col)
+                            .and_then(|name| self.styles.get(name.as_ref()))
+                            .or(default_fmt)
+                            .unwrap_or(&fallback_fmt);
 
-            // --- 1. 遍历 cells 写入数据 ---
-            // sheet.cells[0] 是表头，sheet.cells[1..] 是数据
-            for (row_idx, row) in sheet.cells.iter().enumerate() {
-                let r = data_start_row + row_idx as u32;
-
-                for (col_idx, cell_opt) in row.iter().enumerate() {
-                    let c = col_idx as u16;
-
-                    // 获取单元格样式
-                    let cell_fmt = sheet
-                        .style_map
-                        .as_ref()
-                        .and_then(|m| m.get(&(row_idx as u32, c)))
-                        .and_then(|name| self.styles.get(name.as_ref()))
-                        .or_else(|| {
-                            // 表头行（row_idx == 0）自动应用 header 样式
-                            if row_idx == 0 && sheet.style_map.is_none() {
-                                self.styles.get("header")
-                            } else {
-                                None
-                            }
-                        })
-                        .or(default_fmt)
-                        .unwrap_or(&fallback_fmt);
-
-                    // 写入单元格
-                    if let Some(cell) = cell_opt {
-                        use crate::cell::Cell;
-                        match cell {
-                            Cell::Text(s) => {
-                                worksheet.write_with_format(r, c, s.as_str(), cell_fmt)?;
-                            }
-                            Cell::Number(n) => {
-                                worksheet.write_number_with_format(r, c, *n, cell_fmt)?;
-                            }
-                            Cell::Boolean(b) => {
-                                worksheet.write_boolean_with_format(r, c, *b, cell_fmt)?;
-                            }
-                        }
-                    } else {
-                        // 空单元格，写入 blank 保持样式一致性
-                        worksheet.write_blank(r, c, cell_fmt)?;
+                        merge_list.push((
+                            abs_start_row,
+                            *start_col,
+                            abs_end_row,
+                            *end_col,
+                            content,
+                            style,
+                        ));
                     }
                 }
+                row_offset += region.row_count() as u32;
             }
 
-            // --- 5. 處理 Footer 特殊區域 ---
-            let mut footer_start_row = data_start_row + sheet.cells.len() as u32;
+            // --- 步骤2: 重置 row_offset 并开始写入所有单元格数据 ---
+            row_offset = 0;
+
             for region in &sheet.regions {
-                if matches!(region.region_type, crate::sheet_region::RegionType::Footer) {
-                    footer_start_row = self.write_region_to_worksheet(
-                        worksheet,
-                        region,
-                        footer_start_row,
-                        &fallback_fmt,
-                    )?;
+                // 写入 region 的数据
+                for (rel_row_idx, row) in region.data.iter().enumerate() {
+                    let abs_row = row_offset + rel_row_idx as u32;
+
+                    for (col_idx, cell_opt) in row.iter().enumerate() {
+                        let c = col_idx as u16;
+
+                        // 获取单元格样式（优先使用 region 的 style_map，然后回退到全局样式）
+                        let cell_fmt = region
+                            .get_style(rel_row_idx as u32, c)
+                            .and_then(|name| self.styles.get(name.as_ref()))
+                            .or(default_fmt)
+                            .unwrap_or(&fallback_fmt);
+
+                        // 写入单元格
+                        if let Some(cell) = cell_opt {
+                            match cell {
+                                Cell::Text(s) => {
+                                    worksheet.write_with_format(
+                                        abs_row,
+                                        c,
+                                        s.as_str(),
+                                        cell_fmt,
+                                    )?;
+                                }
+                                Cell::Number(n) => {
+                                    worksheet.write_number_with_format(abs_row, c, *n, cell_fmt)?;
+                                }
+                                Cell::Boolean(b) => {
+                                    worksheet
+                                        .write_boolean_with_format(abs_row, c, *b, cell_fmt)?;
+                                }
+                            }
+                        } else {
+                            // 空单元格，写入 blank 保持样式一致性
+                            worksheet.write_blank(abs_row, c, cell_fmt)?;
+                        }
+                    }
                 }
+
+                // 更新当前行位置
+                row_offset += region.row_count() as u32;
             }
 
-            // --- 6. 自動列寬適配：---
+            // --- 步骤3: 应用所有 merge（在数据写入之后） ---
+            for (start_row, start_col, end_row, end_col, content, style) in merge_list {
+                worksheet.merge_range(start_row, start_col, end_row, end_col, &content, style)?;
+            }
+
+            // --- 自動列寬適配：---
             // 必須在數據寫入完成後調用，確保 Excel 引擎能計算出最長內容的佔位。
             worksheet.autofit(); // 自动调整列宽以适应内容
         }

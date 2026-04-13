@@ -13,7 +13,7 @@ pub mod xls_records;
 // 常用组件提升到顶层
 pub use cell::Cell;
 pub use error::{XlsError, XlsxError};
-pub use sheet_region::{RegionType, SheetRegion};
+pub use sheet_region::SheetRegion;
 pub use workbook::Workbook;
 pub use worksheet::WorkSheet;
 pub use xls_records::RecordType;

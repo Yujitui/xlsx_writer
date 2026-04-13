@@ -1,0 +1,21 @@
+{
+  "styles": {
+    "header": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 11,
+      "bold": true,
+      "bg_color": "#BFBFBF",
+      "align": "center"
+    },
+    "dept_style": {
+      "bg_color": "#E7E6E6",
+      "bold": true
+    },
+    "group_style": {
+      "bg_color": "#F2F2F2"
+    }
+  },
+  "merge_rules": [
+    {"type": "vertical_match", "targets": ["部门", "小组"]}
+  ]
+}
