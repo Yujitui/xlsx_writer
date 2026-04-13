@@ -5,10 +5,10 @@
 //! 2. 执行合并算法扫描 DataFrame
 //! 3. 生成标准化的 Excel 物理坐标合并区间
 //! 4. 处理冲突检测和错误报告
-use polars::prelude::*;
-use serde_json::Value;
 use crate::merge_factory::condition::MergeCondition;
-use crate::merge_factory::error::MergeFactoryError; // 複用列名未找到等錯誤
+use crate::merge_factory::error::MergeFactoryError;
+use polars::prelude::*;
+use serde_json::Value; // 複用列名未找到等錯誤
 
 /// 合并工厂执行引擎
 ///
@@ -23,7 +23,6 @@ pub struct MergeFactory {
 }
 
 impl MergeFactory {
-
     /// 创建并初始化合并工厂实例
     ///
     /// 从 JSON Value 解析合并规则配置，构建 MergeFactory 实例。
@@ -75,14 +74,20 @@ impl MergeFactory {
         df: &DataFrame,
         targets: &[String],
     ) -> Result<Vec<(Series, u16)>, MergeFactoryError> {
-        targets.iter().map(|col_name| {
-            let col_idx = df.get_column_index(col_name)
-                .ok_or_else(|| MergeFactoryError::ColumnNotFound(col_name.clone()))?;
-            let series = df.column(col_name)
-                .map_err(|_| MergeFactoryError::ColumnNotFound(col_name.clone()))?
-                .as_materialized_series().clone();
-            Ok((series, col_idx as u16))
-        }).collect::<Result<Vec<_>, MergeFactoryError>>()
+        targets
+            .iter()
+            .map(|col_name| {
+                let col_idx = df
+                    .get_column_index(col_name)
+                    .ok_or_else(|| MergeFactoryError::ColumnNotFound(col_name.clone()))?;
+                let series = df
+                    .column(col_name)
+                    .map_err(|_| MergeFactoryError::ColumnNotFound(col_name.clone()))?
+                    .as_materialized_series()
+                    .clone();
+                Ok((series, col_idx as u16))
+            })
+            .collect::<Result<Vec<_>, MergeFactoryError>>()
     }
 
     /// 检查两个矩形区域是否重叠
@@ -100,8 +105,7 @@ impl MergeFactory {
 
         // 两个矩形不重叠的条件：一个在另一个的左边、右边、上面、下面
         // 使用德摩根定律转换为重叠条件
-        !(r1_end < r2_start || r1_start > r2_end ||
-            c1_end < c2_start || c1_start > c2_end)
+        !(r1_end < r2_start || r1_start > r2_end || c1_end < c2_start || c1_start > c2_end)
     }
 
     /// 创建优化的包围盒集合
@@ -116,7 +120,9 @@ impl MergeFactory {
     /// # 返回值
     ///
     /// 返回优化后的包围盒列表，每个包围盒都是能覆盖一组重叠区域的最小矩形。
-    fn create_optimized_bounding_boxes(ranges: &[(u32, u16, u32, u16)]) -> Vec<(u32, u16, u32, u16)> {
+    fn create_optimized_bounding_boxes(
+        ranges: &[(u32, u16, u32, u16)],
+    ) -> Vec<(u32, u16, u32, u16)> {
         // 空输入直接返回空结果
         if ranges.is_empty() {
             return vec![];
@@ -180,10 +186,10 @@ impl MergeFactory {
 
                 // 遍历组内其他区域，扩展包围盒边界
                 for &range in ranges_in_group.iter().skip(1) {
-                    min_row = min_row.min(range.0);  // 扩展最小行
-                    min_col = min_col.min(range.1);  // 扩展最小列
-                    max_row = max_row.max(range.2);  // 扩展最大行
-                    max_col = max_col.max(range.3);  // 扩展最大列
+                    min_row = min_row.min(range.0); // 扩展最小行
+                    min_col = min_col.min(range.1); // 扩展最小列
+                    max_row = max_row.max(range.2); // 扩展最大行
+                    max_col = max_col.max(range.3); // 扩展最大列
                 }
 
                 // 将计算出的包围盒添加到结果中
@@ -217,20 +223,23 @@ impl MergeFactory {
         warnings: &mut Vec<String>,
     ) -> Option<(u32, u16, u32, u16)> {
         // 快速冲突检查：直接内联实现
-        let might_conflict = !bounding_boxes.is_empty() &&
-            bounding_boxes.iter().any(|box_rect| {
-                Self::ranges_overlap(&merge_range, box_rect)
-            });
-
+        let might_conflict = !bounding_boxes.is_empty()
+            && bounding_boxes
+                .iter()
+                .any(|box_rect| Self::ranges_overlap(&merge_range, box_rect));
 
         // 如果快速检查显示可能存在冲突，则进行详细检查
         if might_conflict {
             // 进行详细冲突检查
-            if all_ranges.iter().any(|existing|
-                Self::ranges_overlap(&merge_range, existing)
-            ) {
+            if all_ranges
+                .iter()
+                .any(|existing| Self::ranges_overlap(&merge_range, existing))
+            {
                 // 发现真实冲突，记录警告并返回 None 表示不添加
-                warnings.push(format!("合并区域 {:?} 与其他区域冲突，将被忽略", merge_range));
+                warnings.push(format!(
+                    "合并区域 {:?} 与其他区域冲突，将被忽略",
+                    merge_range
+                ));
                 return None; // 有冲突，返回None表示不添加
             }
         }
@@ -286,12 +295,18 @@ impl MergeFactory {
 
                         // 边界校验（仅检查是否超出 DataFrame 物理边界）
                         if e_r > max_phys_row || e_c >= max_phys_col as u32 {
-                            return Err(MergeFactoryError::IndexOutOfBounds(e_r, max_phys_row as usize));
+                            return Err(MergeFactoryError::IndexOutOfBounds(
+                                e_r,
+                                max_phys_row as usize,
+                            ));
                         }
 
                         // 检查列号是否超过 Excel 的 u16 限制
                         if e_c > u16::MAX as u32 {
-                            return Err(MergeFactoryError::ColumnNotFound(format!("列索引 {} 超出 u16 限制", e_c)));
+                            return Err(MergeFactoryError::ColumnNotFound(format!(
+                                "列索引 {} 超出 u16 限制",
+                                e_c
+                            )));
                         }
 
                         // 标准化后的合并区域（转换为 u16 列索引）
@@ -302,7 +317,7 @@ impl MergeFactory {
                             normalized_range,
                             &all_ranges,
                             &bounding_boxes,
-                            &mut warnings
+                            &mut warnings,
                         ) {
                             current_rule_ranges.push(valid_range);
                             all_ranges.push(valid_range);
@@ -312,10 +327,13 @@ impl MergeFactory {
                 // --- 2. 纵向自动合并 (Vertical Match) ---
                 MergeCondition::VerticalMatch { targets, .. } => {
                     // 预检查：空目标或数据行数不足时不处理
-                    if targets.is_empty() || height < 2 { continue; }
+                    if targets.is_empty() || height < 2 {
+                        continue;
+                    }
 
                     // 获取所有目标列的 Series 引用与物理列索引
-                    let target_series_and_indices = Self::get_target_series_and_indices(df, targets)?;
+                    let target_series_and_indices =
+                        Self::get_target_series_and_indices(df, targets)?;
 
                     // 维护每个列的独立合并起始位置
                     let mut start_positions = vec![0; target_series_and_indices.len()];
@@ -326,33 +344,38 @@ impl MergeFactory {
                     for r in 1..height {
                         // 检查每一列是否发生变化
                         for (i, (series, _)) in target_series_and_indices.iter().enumerate() {
-                            changed_columns[i] = series.get(r)? != series.get(start_positions[i])?;
+                            changed_columns[i] =
+                                series.get(r)? != series.get(start_positions[i])?;
                         }
 
                         // 应用父子约束：如果前面的列发生变化，后面的列也必须重新开始
                         // 实现隐式链式扫描：父级变化影响子级
                         for i in 1..changed_columns.len() {
-                            if changed_columns[i-1] {
+                            if changed_columns[i - 1] {
                                 changed_columns[i] = true;
                             }
                         }
 
                         // 处理发生变化的列
-                        for (i, &(ref _series, col_idx)) in target_series_and_indices.iter().enumerate() {
+                        for (i, &(ref _series, col_idx)) in
+                            target_series_and_indices.iter().enumerate()
+                        {
                             if changed_columns[i] {
                                 // 如果区间长度 > 1，则生成合并区间
                                 // 区间为 [start_positions[i], r-1]，转换为Excel坐标需要+1偏移
                                 if r - start_positions[i] > 1 {
                                     let merge_range = (
-                                        (start_positions[i] + 1) as u32, col_idx,
-                                        ((r - 1) + 1) as u32, col_idx
+                                        (start_positions[i] + 1) as u32,
+                                        col_idx,
+                                        ((r - 1) + 1) as u32,
+                                        col_idx,
                                     );
                                     // 执行冲突检测并添加区域
                                     if let Some(valid_range) = Self::check_and_add_merge_range(
                                         merge_range,
                                         &all_ranges,
                                         &bounding_boxes,
-                                        &mut warnings
+                                        &mut warnings,
                                     ) {
                                         current_rule_ranges.push(valid_range);
                                         all_ranges.push(valid_range);
@@ -369,8 +392,10 @@ impl MergeFactory {
                         if height - start_pos > 1 {
                             let col_idx = target_series_and_indices[i].1;
                             let merge_range = (
-                                (start_pos + 1) as u32, col_idx,           // 起始行(+1偏移), 起始列
-                                ((height - 1) + 1) as u32, col_idx         // 结束行(+1偏移), 结束列
+                                (start_pos + 1) as u32,
+                                col_idx, // 起始行(+1偏移), 起始列
+                                ((height - 1) + 1) as u32,
+                                col_idx, // 结束行(+1偏移), 结束列
                             );
 
                             // 执行冲突检测并添加区域
@@ -378,7 +403,7 @@ impl MergeFactory {
                                 merge_range,
                                 &all_ranges,
                                 &bounding_boxes,
-                                &mut warnings
+                                &mut warnings,
                             ) {
                                 current_rule_ranges.push(valid_range);
                                 all_ranges.push(valid_range);
@@ -389,10 +414,13 @@ impl MergeFactory {
                 // --- 3. 横向自动合并 (Horizontal Match) ---
                 MergeCondition::HorizontalMatch { targets, .. } => {
                     // --- 3. 横向自动合并 (Horizontal Match) ---
-                    if targets.is_empty() { continue; }
+                    if targets.is_empty() {
+                        continue;
+                    }
 
                     // 获取所有目标列的 Series 引用与物理列索引
-                    let target_series_and_indices = Self::get_target_series_and_indices(df, targets)?;
+                    let target_series_and_indices =
+                        Self::get_target_series_and_indices(df, targets)?;
 
                     // 对每一行进行处理
                     for row_idx in 0..height {
@@ -418,7 +446,7 @@ impl MergeFactory {
                             // 长度为 j-1，需要 > i 才有意义
                             if (j - 1) > i {
                                 let start_col = target_series_and_indices[i].1;
-                                let end_col = target_series_and_indices[j-1].1;
+                                let end_col = target_series_and_indices[j - 1].1;
                                 let excel_row = (row_idx + 1) as u32;
 
                                 // 构造合并区域：同一行内连续列的合并
@@ -429,12 +457,11 @@ impl MergeFactory {
                                     merge_range,
                                     &all_ranges,
                                     &bounding_boxes,
-                                    &mut warnings
+                                    &mut warnings,
                                 ) {
                                     current_rule_ranges.push(valid_range);
                                     all_ranges.push(valid_range);
                                 }
-
                             }
                             // 移动到下一个不同的值段
                             i = j;

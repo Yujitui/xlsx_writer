@@ -5,7 +5,6 @@ use thiserror::Error;
 /// 涵蓋了從 JSON 解析、邏輯校驗到 Polars 向量化運算的完整錯誤鏈條。
 #[derive(Error, Debug)]
 pub enum StyleFactoryError {
-
     /// 樣式配置文件（JSON）語法錯誤或結構不符合 Schema 要求。
     ///
     /// 由 `serde_json` 拋出，包含具體的行號與列號信息。
@@ -40,5 +39,4 @@ pub enum StyleFactoryError {
     /// 確保樣式定義與樣式應用之間的標識符一致性。
     #[error("未定義的樣式標籤: {0}")]
     UnknownStyle(String),
-
 }

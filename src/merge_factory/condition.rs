@@ -25,7 +25,6 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MergeCondition {
-
     /// 静态坐标合并规则
     ///
     /// 通过直接指定物理坐标来定义合并区域，适用于位置固定的合并需求。
@@ -101,5 +100,4 @@ pub enum MergeCondition {
         #[serde(default)]
         criteria: String,
     },
-
 }

@@ -1,7 +1,6 @@
+use rust_xlsxwriter::{Color, Format, FormatAlign, FormatBorder, FormatPattern, FormatUnderline};
 use serde::Deserialize;
 use std::collections::HashMap;
-use rust_xlsxwriter::{Format, Color, FormatBorder, FormatAlign, FormatUnderline, FormatPattern};
-
 
 /// 單個單元格樣式的詳細定義。
 ///
@@ -14,28 +13,27 @@ pub struct StyleDefinition {
     pub font_color: Option<String>, // 支持 "#RRGGBB"
     pub bold: Option<bool>,
     pub italic: Option<bool>,
-    pub underline: Option<String>,   // "single", "double" 等
+    pub underline: Option<String>, // "single", "double" 等
 
     // --- 對齊相關 ---
-    pub align: Option<String>,       // "left", "center", "right", "fill", "justify"
-    pub valign: Option<String>,      // "top", "vcenter", "bottom", "vjustify"
+    pub align: Option<String>, // "left", "center", "right", "fill", "justify"
+    pub valign: Option<String>, // "top", "vcenter", "bottom", "vjustify"
     pub text_wrap: Option<bool>,
 
     // --- 邊框相關 (支持四周統一設置) ---
-    pub border: Option<String>,      // "none", "thin", "medium", "dashed", "thick"
+    pub border: Option<String>, // "none", "thin", "medium", "dashed", "thick"
     pub border_color: Option<String>,
 
     // --- 背景與底紋 ---
     pub bg_color: Option<String>,
     pub fg_color: Option<String>,
-    pub pattern: Option<u8>,         // 0..18 對應 Excel Pattern
+    pub pattern: Option<u8>, // 0..18 對應 Excel Pattern
 
     // --- 數據格式 ---
-    pub num_format: Option<String>,  // 如 "yyyy-mm-dd" 或 "#,##0.00"
+    pub num_format: Option<String>, // 如 "yyyy-mm-dd" 或 "#,##0.00"
 }
 
 impl StyleDefinition {
-
     /// 將抽象的樣式定義轉換為 Excel 實體格式對象（Format）。
     ///
     /// 該方法透過逐一檢查可選字段，動態構建一個完整的 Excel 單元格格式。
@@ -51,13 +49,23 @@ impl StyleDefinition {
         let mut format = Format::new();
 
         // 1. 字體處理：注意賦值回 format 變量
-        if let Some(ref name) = self.font_name { format = format.set_font_name(name); }
-        if let Some(size) = self.font_size { format = format.set_font_size(size); }
-        if let Some(ref color) = self.font_color { format = format.set_font_color(parse_color(color)); }
+        if let Some(ref name) = self.font_name {
+            format = format.set_font_name(name);
+        }
+        if let Some(size) = self.font_size {
+            format = format.set_font_size(size);
+        }
+        if let Some(ref color) = self.font_color {
+            format = format.set_font_color(parse_color(color));
+        }
 
         // 對於 Boolean 標記，rust_xlsxwriter 的 API 通常也是返回新實例
-        if let Some(true) = self.bold { format = format.set_bold(); }
-        if let Some(true) = self.italic { format = format.set_italic(); }
+        if let Some(true) = self.bold {
+            format = format.set_bold();
+        }
+        if let Some(true) = self.italic {
+            format = format.set_italic();
+        }
 
         if let Some(ref u) = self.underline {
             let underline_type = match u.as_str() {
@@ -93,7 +101,9 @@ impl StyleDefinition {
             format = format.set_align(v_align);
         }
 
-        if let Some(true) = self.text_wrap { format = format.set_text_wrap(); }
+        if let Some(true) = self.text_wrap {
+            format = format.set_text_wrap();
+        }
 
         // 3. 邊框處理
         if let Some(ref b) = self.border {
@@ -143,7 +153,6 @@ impl StyleDefinition {
 
         format
     }
-
 }
 
 /// 樣式資源庫：存儲從 JSON 加載的所有樣式模板。
@@ -159,7 +168,6 @@ pub struct StyleLibrary {
 }
 
 impl StyleLibrary {
-
     /// 創建一個空的樣式資源庫實例。
     ///
     /// 用於手動構建樣式定義或作為動態插入的基礎容器。
@@ -181,7 +189,9 @@ impl StyleLibrary {
         // 如果傳入的不是 Object，serde_json 會在此處拋出錯誤，這符合「輸入無效則報錯」的預期
         let definitions: HashMap<String, StyleDefinition> = serde_json::from_value(value.clone())?;
 
-        Ok(Self { styles: definitions })
+        Ok(Self {
+            styles: definitions,
+        })
     }
 
     /// 手動插入或更新單個樣式定義。
@@ -204,7 +214,10 @@ impl StyleLibrary {
     ///
     /// # 錯誤處理
     /// 若傳入的 JSON 片段與映射表結構不符（例如非對象格式），則返回反序列化錯誤。
-    pub fn insert_from_json(self, value: &serde_json::Value) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn insert_from_json(
+        self,
+        value: &serde_json::Value,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // 1. 檢查是否為有效的 JSON Object
         if !value.is_object() {
             // 返回一個空的庫實例，並可選擇性打印警告
@@ -214,7 +227,9 @@ impl StyleLibrary {
 
         // 2. 只有是 Object 時才執行解析
         let definitions: HashMap<String, StyleDefinition> = serde_json::from_value(value.clone())?;
-        Ok(Self { styles: definitions })
+        Ok(Self {
+            styles: definitions,
+        })
     }
 
     /// 將資源庫中所有的抽象定義轉換為物理樣式對象池。
@@ -229,7 +244,6 @@ impl StyleLibrary {
             .map(|(name, def)| (name.clone(), def.to_format()))
             .collect()
     }
-
 }
 
 /// 將 HTML/CSS 風格的十六進位顏色字串解析為 Excel 顏色對象。

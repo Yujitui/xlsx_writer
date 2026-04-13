@@ -6,7 +6,6 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StyleCondition {
-
     /// 1. 物理位置定位。
     ///
     /// 依賴行號（Index）直接選定目標，不依賴數據內容。
@@ -69,11 +68,9 @@ pub enum StyleCondition {
         /// 支持负数，例如 [0, 0] 代表排除第一行，[-1, -1] 代表排除最后一行。
         criteria: [i32; 2],
     },
-
 }
 
 impl StyleCondition {
-
     /// 獲取當前條件所關聯的目標列名清單
     ///
     /// 此方法用於在單元格級別的樣式覆蓋中確定塗色範圍。
@@ -97,5 +94,4 @@ impl StyleCondition {
             StyleCondition::Equal { targets, .. } => Some(targets),
         }
     }
-
 }

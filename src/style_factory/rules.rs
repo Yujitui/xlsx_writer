@@ -1,12 +1,11 @@
-use serde::Deserialize;
 use crate::style_factory::StyleCondition;
+use serde::Deserialize;
 
 /// 局部樣式覆蓋規則
 ///
 /// 提供細粒度的樣式控制，在已選中行的內部針對特定單元格進行樣式替換。
 #[derive(Deserialize, Debug)]
 pub struct StyleOverride {
-
     /// 覆蓋樣式名稱
     ///
     /// 當列條件滿足時應用的樣式，會覆蓋所在行的基礎樣式。
@@ -24,7 +23,6 @@ pub struct StyleOverride {
     /// # 邏輯關係
     /// 多個條件之間為邏輯「與」（AND）關係。
     pub col_conditions: Vec<StyleCondition>,
-
 }
 
 /// 樣式應用策略
@@ -32,7 +30,6 @@ pub struct StyleOverride {
 /// 定義命中行規則後的兩層樣式應用機制。
 #[derive(Deserialize, Debug)]
 pub struct ApplyAction {
-
     /// 行級基礎樣式
     ///
     /// 命中行的所有單元格首先應用此樣式。
@@ -43,7 +40,6 @@ pub struct ApplyAction {
     ///
     /// 可選的局部樣式覆蓋，用於精確控制特定單元格的顯示效果。
     pub overrides: Option<Vec<StyleOverride>>,
-
 }
 
 /// 樣式規則定義
@@ -51,7 +47,6 @@ pub struct ApplyAction {
 /// 描述在特定數據條件下如何應用樣式的完整規則。
 #[derive(Deserialize, Debug)]
 pub struct StyleRule {
-
     /// 行選擇條件
     ///
     /// 定義哪些行應該應用此樣式規則。多個條件之間為邏輯「與」關係。
@@ -62,5 +57,4 @@ pub struct StyleRule {
     ///
     /// 定義選中行後的樣式處理方式，包括基礎樣式和可選的覆蓋規則。
     pub apply: ApplyAction,
-
 }

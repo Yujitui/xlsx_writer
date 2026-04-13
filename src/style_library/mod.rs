@@ -1,4 +1,4 @@
 mod definition;
 mod error;
 
-pub use definition::{StyleLibrary, StyleDefinition};
+pub use definition::{StyleDefinition, StyleLibrary};

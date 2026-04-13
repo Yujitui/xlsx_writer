@@ -1,5 +1,5 @@
+use serde::Deserialize;
 use std::hash::Hash;
-use serde::{Deserialize};
 
 /// 单个工作表的读取配置
 ///
@@ -35,7 +35,6 @@ pub struct ReadSheet {
 }
 
 impl ReadSheet {
-
     /// 创建新的工作表读取配置
     ///
     /// 构造一个基本的`ReadSheet`实例，使用指定的工作表名称，
@@ -54,7 +53,6 @@ impl ReadSheet {
             ..Default::default()
         }
     }
-
 }
 
 // 为 ReadSheet 实现 Default trait，便于测试和默认配置

@@ -1,5 +1,5 @@
-use thiserror::Error;
 use polars::prelude::PolarsError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum MergeFactoryError {

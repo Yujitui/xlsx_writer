@@ -4,28 +4,27 @@
 //! - 管理全局样式配置（样式池）
 //! - 维护工作表导出任务队列
 //! - 协调多工作表的统一导出流程
+use crate::cell::Cell;
 use crate::error::XlsxError;
 use crate::merge_factory::MergeFactory;
+use crate::prelude::ReadSheet;
 use crate::style_factory::StyleFactory;
 use crate::style_library::StyleLibrary;
 use crate::worksheet::WorkSheet;
-use calamine::{open_workbook, Data, DataType, Reader, Xlsx};
-use chrono::NaiveDate;
+use calamine::{open_workbook, DataType, Reader, Xlsx};
 use polars::prelude::*;
 use rust_xlsxwriter::*;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::Path;
-use crate::prelude::ReadSheet;
 
 /// Excel 工作簿导出管理器
 ///
 /// 作为 Excel 导出系统的顶层容器，负责协调多个工作表的统一导出。
 /// 通过样式池和任务队列的管理，实现高效、一致的 Excel 文件生成。
 pub struct Workbook {
-
     /// 全局样式配置池（私有字段）
     ///
     /// 存储预定义的样式格式，通过字符串标签进行引用。
@@ -36,22 +35,21 @@ pub struct Workbook {
     /// 按照 Vec 中的顺序进行工作表导出，索引 0 对应 Excel 中的第一个工作表。
     /// 每个工作表包含完整的数据和样式信息。
     sheets: Vec<WorkSheet>,
-
 }
+
+// ============================================================================
+// 1. 核心访问 API
+// ============================================================================
 
 impl Workbook {
     /// 获取工作簿中工作表的数量
-    ///
-    /// 用于查询当前工作簿中已添加的工作表总数，
-    /// 便于了解工作簿的规模和进行相关统计。
-    ///
-    /// # 返回值
-    ///
-    /// 返回 `usize` 类型的工作表数量：
-    /// - `0` 表示空工作簿（尚未添加任何工作表）
-    /// - `n` 表示包含 n 个工作表
-    pub fn sheet_count(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.sheets.len()
+    }
+
+    /// 检查工作簿是否为空
+    pub fn is_empty(&self) -> bool {
+        self.sheets.is_empty()
     }
 
     /// 按索引获取工作表名称
@@ -62,7 +60,7 @@ impl Workbook {
     /// # 返回值
     /// * `Some(&str)` - 工作表名称
     /// * `None` - 索引无效
-    pub fn get_sheet_name(&self, index: usize) -> Option<&str> {
+    pub fn sheet_name(&self, index: usize) -> Option<&str> {
         self.sheets.get(index).map(|sheet| sheet.name.as_str())
     }
 
@@ -76,8 +74,20 @@ impl Workbook {
     /// # 返回值
     /// * `Some(&WorkSheet)` - 找到匹配的工作表，返回其引用
     /// * `None` - 未找到指定名称的工作表
-    pub fn get_sheet_by_name(&self, name: &str) -> Option<&WorkSheet> {
+    pub fn sheet(&self, name: &str) -> Option<&WorkSheet> {
         self.sheets.iter().find(|sheet| sheet.name == name)
+    }
+
+    /// 通过工作表名称查找可变引用
+    ///
+    /// # 参数
+    /// * `name` - 要查找的工作表名称
+    ///
+    /// # 返回值
+    /// * `Some(&mut WorkSheet)` - 找到匹配的工作表，返回其可变引用
+    /// * `None` - 未找到指定名称的工作表
+    pub fn sheet_mut(&mut self, name: &str) -> Option<&mut WorkSheet> {
+        self.sheets.iter_mut().find(|sheet| sheet.name == name)
     }
 
     /// 按索引获取工作表的样式映射（简化版）
@@ -90,14 +100,18 @@ impl Workbook {
     /// # 返回值
     /// * `Some(&HashMap<(u32, u16), Arc<str>>)` - 存在且有样式映射
     /// * `None` - 工作表不存在或无样式映射
-    pub fn get_sheet_style_map_simple(&self, index: usize) -> Option<&HashMap<(u32, u16), Arc<str>>> {
-        self.sheets.get(index).and_then(|sheet| sheet.style_map.as_ref())
+    pub fn style_map(&self, index: usize) -> Option<&HashMap<(u32, u16), Arc<str>>> {
+        self.sheets
+            .get(index)
+            .and_then(|sheet| sheet.style_map.as_ref())
     }
-
 }
 
-impl Workbook {
+// ============================================================================
+// 2. 构造与配置
+// ============================================================================
 
+impl Workbook {
     /// 创建并初始化新的 Workbook 实例
     ///
     /// 工厂方法模式实现，负责 Workbook 对象的构造和基础环境初始化。
@@ -111,24 +125,25 @@ impl Workbook {
         let font_name = if cfg!(target_os = "windows") {
             "Microsoft YaHei" // Windows: 微软雅黑
         } else if cfg!(target_os = "macos") {
-            "PingFang SC"      // macOS: 苹方
+            "PingFang SC" // macOS: 苹方
         } else {
-            "sans-serif"       // Linux 或其他: 通用無襯線字體
+            "sans-serif" // Linux 或其他: 通用無襯線字體
         };
 
         // 2. 定義「標準樣式」：
         // 這是報表中絕大多數單元格的底層模板，包含了邊框、字體和對齊方式。
         let standard_fmt = Format::new()
             .set_font_name(font_name) // 設置微軟雅黑
-            .set_font_size(11)                 // 設置常用字號
-            .set_border(FormatBorder::Thin)   // 設置細邊框（四周）
-            .set_align(FormatAlign::Center)   // 水平居中
+            .set_font_size(11) // 設置常用字號
+            .set_border(FormatBorder::Thin) // 設置細邊框（四周）
+            .set_align(FormatAlign::Center) // 水平居中
             .set_align(FormatAlign::VerticalCenter); // 垂直居中
 
         // 3. 快速派生「表頭樣式」：
         // 通過 clone() 繼承 standard_fmt 的屬性，僅對差異項（加粗、背景）進行覆蓋。
         // 這種鏈式調用確保了表頭與數據行在字體、邊框寬度上完全對齊。
-        let header_fmt = standard_fmt.clone()
+        let header_fmt = standard_fmt
+            .clone()
             .set_bold()
             .set_background_color(Color::RGB(0xBFBFBF));
 
@@ -143,176 +158,14 @@ impl Workbook {
         })
     }
 
-    /// 将DataFrame中的指定列转换为字符串类型
-    ///
-    /// 此函数用于确保某些列始终以字符串形式存储，即使它们在Excel中可能是数值类型。
-    /// 这对于处理ID号、邮政编码等需要保持前导零的字段特别有用。
-    ///
-    /// # 参数
-    /// * `df` - 需要处理的DataFrame引用
-    /// * `string_columns` - 包含需要转换为字符串的列名向量
-    ///
-    /// # 返回值
-    /// * `Result<DataFrame, XlsxError>` - 成功时返回处理后的DataFrame，失败时返回错误
-    fn sanitize_to_string_column(name: &str, data: &[AnyValue]) -> Result<Series, Box<dyn Error>> {
-        let sanitized: Vec<AnyValue> = data
-            .iter()
-            .map(|val| match val {
-                // 将数字、布尔等统统转为字符串
-                AnyValue::Float64(f) => {
-                    // 如果是整数，去掉小数点；否则保留
-                    let s = if f.fract() == 0.0 { format!("{:.0}", f) } else { f.to_string() };
-                    AnyValue::StringOwned(s.into())
-                },
-                AnyValue::Int64(i) => AnyValue::StringOwned(i.to_string().into()),
-                AnyValue::Boolean(b) => AnyValue::StringOwned(b.to_string().into()),
-                // 如果已经是字符串或 Null，保持原样
-                AnyValue::String(s) => AnyValue::StringOwned((*s).into()),
-                AnyValue::StringOwned(s) => AnyValue::StringOwned(s.clone()),
-                AnyValue::Date(d) => {
-                    // 假设你引用了 chrono，或者简单地将其转为字符串
-                    // 这里的 d 是自 1970-01-01 以来的天数
-                    AnyValue::StringOwned(format!("{}", d).into()) // 或者调用专门的日期格式化函数
-                },
-                AnyValue::Null => AnyValue::Null,
-                _ => AnyValue::StringOwned(format!("{:?}", val).into()), // 兜底处理
-            })
-            .collect();
-
-        Ok(Series::from_any_values(name.into(), &sanitized, true)?)
-    }
-
-    /// 从Excel文件中读取数据并转换为Polars DataFrame
-    ///
-    /// 此函数支持读取xlsx和xlsm格式的Excel文件，能够处理多种数据类型并提供
-    /// 灵活的列类型控制选项。自动处理日期、数值、字符串等不同类型的数据。
-    ///
-    /// # 参数
-    /// * `path` - Excel文件的完整路径
-    /// * `read_sheet` - 可选的工作表读取配置，如果为None则读取第一个可见工作表
-    ///   - `sheet_name`: 指定要读取的工作表名称
-    ///   - `force_string_cols`: 可选的列名列表，指定这些列强制作为字符串类型读取
-    ///   - `skip_rows`: 可选的行数，指定要跳过的起始行数
-    ///
-    /// # 返回值
-    /// * `Result<DataFrame, XlsxError>` - 成功时返回包含数据的DataFrame，失败时返回错误
-    fn read_xlsx(
-        excel: &mut Xlsx<BufReader<std::fs::File>>,
-        read_sheet: Option<ReadSheet>,
-    ) -> Result<DataFrame, XlsxError> {
-        // Step 1: 打开 Excel 文件
-        // let mut excel: Xlsx<_> =
-        //     open_workbook(Path::new(path)).map_err(|e| XlsxError::CalamineError(e))?;
-
-        // Step 2: 获取可用的工作表名列表
-        let sheet_names = excel.sheet_names();
-        if sheet_names.is_empty() {
-            return Err(XlsxError::NoSheetsFound);
-        }
-
-        // Step 3: 确定要使用的参数
-        let (target_sheet, skip_rows, force_string_cols) = match &read_sheet {
-            Some(sheet) => {
-                // 验证 sheet 名称是否存在
-                if !sheet_names.contains(&sheet.sheet_name) {
-                    return Err(XlsxError::SheetNotFound(sheet.sheet_name.clone()));
-                }
-
-                let skip_rows = sheet.skip_rows.unwrap_or(0);
-                let force_string_cols = sheet.force_string_cols.clone().unwrap_or_default();
-
-                (&sheet.sheet_name, skip_rows, force_string_cols)
-            }
-            None => {
-                // 使用第一个 sheet，使用默认值
-                let first_sheet = sheet_names.first().ok_or(XlsxError::NoSheetsFound)?;
-                (first_sheet, 0, Vec::new())
-            }
-        };
-
-        // Step 4: 获取指定工作表的数据范围 (Range)
-        let range = excel
-            .worksheet_range(target_sheet)
-            .map_err(|e| XlsxError::CalamineError(e))?;
-
-        // Step 5: 获取所有数据
-        let mut rows = range.rows().skip(skip_rows);
-
-        // Step 6: 提取表头并处理空值/缺失项
-        let headers: Vec<String> = {
-            let first_row = rows.next();
-            first_row
-                .ok_or(XlsxError::MissingHeaderRow)?
-                .iter()
-                .enumerate()
-                .map(|(idx, cell)| {
-                    let raw = cell.to_string();
-                    if raw.trim().is_empty() {
-                        format!("column_{}", idx)
-                    } else {
-                        raw
-                    }
-                })
-                .collect()
-        };
-
-        // Step 7: 初始化每一列的容器
-        let mut columns_data: Vec<Vec<AnyValue>> = vec![Vec::new(); headers.len()];
-
-        // Step 8: 从第二行开始遍历数据行
-        for row in rows {
-            for (col_idx, cell) in row.iter().enumerate() {
-                let value = if force_string_cols.contains(&headers[col_idx]) {
-                    AnyValue::StringOwned(cell.to_string().into())
-                } else {
-                    match cell {
-                        Data::Int(val) => AnyValue::Int64(*val),
-                        Data::Float(val) => AnyValue::Float64(*val),
-                        Data::String(val) => AnyValue::String(val),
-                        Data::Bool(val) => AnyValue::Boolean(*val),
-                        Data::Empty => AnyValue::Null,
-                        _ => {
-                            if let Some(date) = cell.as_date() {
-                                let days = (date - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-                                AnyValue::Date(days as i32)
-                            } else {
-                                AnyValue::Null
-                            }
-                        }
-                    }
-                };
-                columns_data[col_idx].push(value);
-            }
-        }
-
-        // Step 8: 转换为 Vec<Series>
-        let series_vec: Vec<Series> = headers
-            .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let col_name = name.as_str();
-                let data = &columns_data[i];
-
-                Series::from_any_values(col_name.into(), data, true).or_else(|_| {
-                    eprintln!("警告：列 [{col_name}] 类型不一致，已强制转为 String");
-                    Self::sanitize_to_string_column(col_name, data)
-                        .map_err(|_| XlsxError::ConversionFailed {
-                            column: col_name.to_string(),
-                        })
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // Step 9: 构造 DataFrame 并返回
-        let df = DataFrame::new(series_vec[0].len(), series_vec.into_iter().map(Column::from).collect())
-            .map_err(|e| XlsxError::ConversionFailed {
-                column: format!("构造 DataFrame 失败: {}", e),
-            })?;
-
-        Ok(df)
-    }
+    // ============================================================================
+    // 3. I/O 操作（读取和保存）
+    // ============================================================================
 
     /// 从Excel文件读取多个工作表数据
+    ///
+    /// 支持自动格式检测和回退机制。首先根据文件扩展名选择读取方法，
+    /// 如果首选方法失败，会自动尝试备选格式。
     ///
     /// # 参数
     /// * `path` - Excel文件的完整路径
@@ -321,60 +174,572 @@ impl Workbook {
     /// # 返回值
     /// 返回当前Workbook实例，便于链式调用
     pub fn read(mut self, path: &str, read_sheets: Vec<ReadSheet>) -> Self {
-        let mut excel: Xlsx<BufReader<std::fs::File>> = match open_workbook(Path::new(path)).map_err(XlsxError::CalamineError) {
-            Ok(excel) => excel,
-            Err(e) => {
-                eprintln!("警告: 无法打开Excel文件 '{}': {}", path, e);
-                return self
-            }
+        // 按后缀确定首选方法
+        let preferred_is_xls = path.to_lowercase().ends_with(".xls");
+
+        // 尝试首选方法
+        let primary_result = if preferred_is_xls {
+            self.try_read_as_xls(path, &read_sheets)
+        } else {
+            self.try_read_as_xlsx(path, &read_sheets)
         };
+
+        match primary_result {
+            Ok(_) => self,
+            Err(primary_err) => {
+                eprintln!(
+                    "首选读取方法失败（后缀 {}）: {}",
+                    if preferred_is_xls { ".xls" } else { ".xlsx" },
+                    primary_err
+                );
+
+                // 清空已添加的工作表（为未来扩展预留）
+                self.sheets.clear();
+
+                // 尝试备选方法
+                let fallback_result = if preferred_is_xls {
+                    eprintln!("尝试回退到 .xlsx 格式读取...");
+                    self.try_read_as_xlsx(path, &read_sheets)
+                } else {
+                    eprintln!("尝试回退到 .xls 格式读取...");
+                    self.try_read_as_xls(path, &read_sheets)
+                };
+
+                match fallback_result {
+                    Ok(_) => {
+                        eprintln!("警告: 文件格式与后缀 '{}' 不符", path);
+                        self
+                    }
+                    Err(fallback_err) => {
+                        eprintln!("备选读取方法也失败: {}", fallback_err);
+                        eprintln!("无法读取文件: {}", path);
+                        self
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 私有辅助方法
+    // ------------------------------------------------------------------------
+
+    /// 去除重复的 ReadSheet，保持原始顺序
+    fn dedup_read_sheets(read_sheets: Vec<ReadSheet>) -> Vec<ReadSheet> {
+        let mut seen = std::collections::HashSet::new();
+        read_sheets
+            .into_iter()
+            .filter(|sheet| seen.insert(sheet.clone()))
+            .collect()
+    }
+
+    /// 尝试读取为 .xlsx 格式
+    fn try_read_as_xlsx(&mut self, path: &str, read_sheets: &Vec<ReadSheet>) -> Result<(), String> {
+        use calamine::Data;
+        use chrono::NaiveDate;
+
+        let mut excel: Xlsx<BufReader<std::fs::File>> = match open_workbook(Path::new(path)) {
+            Ok(excel) => excel,
+            Err(e) => return Err(format!("无法打开文件: {}", e)),
+        };
+
+        let read_sheets = Self::dedup_read_sheets(read_sheets.clone());
 
         let read_sheets = if read_sheets.is_empty() {
             let sheet_names = excel.sheet_names();
             if sheet_names.is_empty() {
-                eprintln!("警告: Excel文件中没有工作表");
-                return self;
+                return Err("Excel文件中没有工作表".to_string());
             }
-            sheet_names.iter().map(|name| ReadSheet::new(name.to_string())).collect()
-        }
-        else {
-            //去除可能重复的sheet_name
-            // 去除重复的sheet_name，保持原始顺序
-            let mut seen = std::collections::HashSet::new();
+            sheet_names
+                .iter()
+                .map(|name| ReadSheet::new(name.to_string()))
+                .collect()
+        } else {
             read_sheets
-                .into_iter()
-                .filter(|sheet| seen.insert(sheet.clone()))
-                .collect::<Vec<ReadSheet>>()
         };
 
-        // sheet为空则直接返回self
-        if read_sheets.is_empty() { return self };
+        if read_sheets.is_empty() {
+            return Ok(());
+        }
 
-        for sheet in &read_sheets {
-            match Self::read_xlsx(&mut excel, Some(sheet.clone())) {
-                Ok(df) => {
-                    let worksheet = match WorkSheet::new(df, sheet.sheet_name.clone(), None, None) {
-                        Ok(worksheet) => worksheet,
-                        Err(e) => {
-                            eprintln!("创建工作表 '{}' 失败: {}", sheet.sheet_name, e);
-                            continue;
-                        }
-                    };
-                    if let None = self.get_sheet_by_name(worksheet.name.as_str()) {
-                        self.sheets.push(worksheet);
+        for sheet_config in &read_sheets {
+            // 直接使用 calamine 读取数据并转换为 cells
+            let result = (|| -> Result<WorkSheet, XlsxError> {
+                let sheet_names = excel.sheet_names();
+
+                // 确定目标工作表
+                let target_sheet = if sheet_names.contains(&sheet_config.sheet_name) {
+                    &sheet_config.sheet_name
+                } else {
+                    return Err(XlsxError::SheetNotFound(sheet_config.sheet_name.clone()));
+                };
+
+                let skip_rows = sheet_config.skip_rows.unwrap_or(0);
+                let force_string_cols = sheet_config.force_string_cols.clone().unwrap_or_default();
+
+                // 获取工作表数据
+                let range = excel
+                    .worksheet_range(target_sheet)
+                    .map_err(|e| XlsxError::CalamineError(e))?;
+
+                let mut rows = range.rows().skip(skip_rows);
+
+                // 提取表头
+                let headers: Vec<String> = {
+                    let first_row = rows.next().ok_or(XlsxError::MissingHeaderRow)?;
+                    first_row
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, cell)| {
+                            let raw = cell.to_string();
+                            if raw.trim().is_empty() {
+                                format!("column_{}", idx)
+                            } else {
+                                raw
+                            }
+                        })
+                        .collect()
+                };
+
+                // 构建 cells
+                let mut cells: Vec<Vec<Option<Cell>>> = Vec::new();
+
+                // 第 0 行：表头
+                cells.push(
+                    headers
+                        .iter()
+                        .map(|h| Some(Cell::Text(h.clone())))
+                        .collect(),
+                );
+
+                // 数据行
+                for row in rows {
+                    let mut cell_row: Vec<Option<Cell>> = Vec::new();
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        let cell_value = if force_string_cols.contains(&headers[col_idx]) {
+                            Some(Cell::Text(cell.to_string()))
+                        } else {
+                            match cell {
+                                Data::Int(val) => Some(Cell::Number(*val as f64)),
+                                Data::Float(val) => Some(Cell::Number(*val)),
+                                Data::String(val) => Some(Cell::Text(val.clone())),
+                                Data::Bool(val) => Some(Cell::Boolean(*val)),
+                                Data::Empty => None,
+                                _ => {
+                                    if let Some(date) = cell.as_date() {
+                                        // Excel 日期转换为序列号
+                                        let excel_epoch =
+                                            NaiveDate::from_ymd_opt(1899, 12, 30).unwrap();
+                                        let days = (date - excel_epoch).num_days();
+                                        Some(Cell::Number(days as f64))
+                                    } else {
+                                        Some(Cell::Text(cell.to_string()))
+                                    }
+                                }
+                            }
+                        };
+                        cell_row.push(cell_value);
                     }
-                    else {
-                        eprintln!("sheet '{}' 与现有表格重复", sheet.sheet_name);
-                        continue;
+                    cells.push(cell_row);
+                }
+
+                WorkSheet::new(cells, sheet_config.sheet_name.clone(), None, None)
+            })();
+
+            match result {
+                Ok(worksheet) => {
+                    if self.sheet(worksheet.name.as_str()).is_none() {
+                        self.sheets.push(worksheet);
+                    } else {
+                        eprintln!("sheet '{}' 与现有表格重复", worksheet.name);
                     }
                 }
                 Err(e) => {
-                    eprintln!("读取sheet '{}' 失败: {}", sheet.sheet_name, e);
-                    continue;
+                    eprintln!("读取sheet '{}' 失败: {}", sheet_config.sheet_name, e);
                 }
             }
         }
-        self
+
+        Ok(())
+    }
+
+    /// 将特殊区域写入 worksheet
+    ///
+    /// # 参数
+    /// * `worksheet` - 目标工作表
+    /// * `region` - 要写入的特殊区域
+    /// * `start_row` - 起始行号
+    /// * `fallback_fmt` - 默认样式
+    ///
+    /// # 返回值
+    /// 返回写入后的下一行号
+    fn write_region_to_worksheet(
+        &self,
+        worksheet: &mut Worksheet,
+        region: &crate::sheet_region::SheetRegion,
+        start_row: u32,
+        fallback_fmt: &Format,
+    ) -> Result<u32, Box<dyn Error>> {
+        let default_fmt = self.styles.get("default");
+        let mut current_row = start_row;
+
+        // 写入区域数据
+        for (rel_row, row_data) in region.data.iter().enumerate() {
+            for (rel_col, cell_opt) in row_data.iter().enumerate() {
+                let r = start_row + rel_row as u32;
+                let c = rel_col as u16;
+
+                // 获取单元格样式
+                let cell_fmt = region
+                    .style_map
+                    .as_ref()
+                    .and_then(|m| m.get(&(rel_row as u32, c)))
+                    .and_then(|name| self.styles.get(name.as_ref()))
+                    .or(default_fmt)
+                    .unwrap_or(fallback_fmt);
+
+                // 写入单元格
+                if let Some(cell) = cell_opt {
+                    match cell {
+                        crate::Cell::Text(s) => {
+                            worksheet.write_with_format(r, c, s.as_str(), cell_fmt)?;
+                        }
+                        crate::Cell::Number(n) => {
+                            worksheet.write_number_with_format(r, c, *n, cell_fmt)?;
+                        }
+                        crate::Cell::Boolean(b) => {
+                            worksheet.write_boolean_with_format(r, c, *b, cell_fmt)?;
+                        }
+                    }
+                } else {
+                    // 空单元格，写入 blank 保持样式
+                    worksheet.write_blank(r, c, cell_fmt)?;
+                }
+            }
+            current_row = start_row + rel_row as u32 + 1;
+        }
+
+        // 处理合并区域
+        if let Some(ref merge_ranges) = region.merge_ranges {
+            for merge_range in merge_ranges {
+                worksheet.merge_range(
+                    start_row + merge_range.0, // first_row
+                    merge_range.1,             // first_col
+                    start_row + merge_range.2, // last_row
+                    merge_range.3,             // last_col
+                    "",                        // 数据为空白字符串
+                    fallback_fmt,              // 使用默认样式
+                )?;
+            }
+        }
+
+        Ok(current_row)
+    }
+
+    // ------------------------------------------------------------------------
+    // XLS 格式专用方法（BIFF8）
+    // ------------------------------------------------------------------------
+
+    /// 尝试读取为 .xls 格式
+    fn try_read_as_xls(&mut self, path: &str, read_sheets: &Vec<ReadSheet>) -> Result<(), String> {
+        use cfb::CompoundFile;
+        use std::fs::File;
+        use std::io::{BufReader, Cursor, Read};
+
+        // 打开文件并读取到缓冲区
+        let file = File::open(path).map_err(|e| format!("无法打开文件: {}", e))?;
+        let mut buf_reader = BufReader::new(file);
+        let mut buffer = Vec::new();
+        buf_reader
+            .read_to_end(&mut buffer)
+            .map_err(|e| format!("无法读取文件: {}", e))?;
+
+        // 解析 CFB 结构
+        let mut cursor = Cursor::new(buffer);
+        let mut cfb = CompoundFile::open(&mut cursor).map_err(|e| format!("CFB 错误: {}", e))?;
+
+        // 打开 Workbook 流
+        let workbook_stream = cfb
+            .open_stream("Workbook")
+            .map_err(|_| "Workbook stream not found".to_string())?;
+
+        // 读取所有字节
+        let bytes: Vec<u8> = workbook_stream
+            .bytes()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("读取流错误: {}", e))?;
+
+        // 解析工作簿
+        let mut reader = Cursor::new(bytes);
+        let (sheet_names, sheets_data, sst) = Self::parse_xls_workbook(&mut reader)?;
+
+        // 去重 read_sheets
+        let read_sheets = Self::dedup_read_sheets(read_sheets.clone());
+
+        // 确定要处理的工作表
+        let sheets_to_process: Vec<(usize, Option<&ReadSheet>)> = if read_sheets.is_empty() {
+            // 读取所有表
+            (0..sheets_data.len()).map(|idx| (idx, None)).collect()
+        } else {
+            // 按 read_sheets 筛选
+            read_sheets
+                .iter()
+                .filter_map(|rs| {
+                    sheet_names
+                        .iter()
+                        .position(|name| name == &rs.sheet_name)
+                        .map(|idx| (idx, Some(rs)))
+                })
+                .collect()
+        };
+
+        if sheets_to_process.is_empty() {
+            return Err("没有匹配的工作表".to_string());
+        }
+
+        // 转换每个工作表
+        for (idx, read_sheet) in sheets_to_process {
+            if idx >= sheets_data.len() {
+                continue;
+            }
+            let sheet_name = &sheet_names[idx];
+            let rows = &sheets_data[idx];
+
+            match Self::convert_to_worksheet(sheet_name, rows, read_sheet, &sst) {
+                Ok(worksheet) => {
+                    if self.sheet(worksheet.name.as_str()).is_none() {
+                        self.sheets.push(worksheet);
+                    } else {
+                        eprintln!("sheet '{}' 与现有表格重复", worksheet.name);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("转换工作表 '{}' 失败: {}", sheet_name, e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 解析 XLS 工作簿，返回工作表名称、行数据和 SST
+    fn parse_xls_workbook<R: Read>(
+        reader: &mut R,
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<Vec<Vec<Option<crate::Cell>>>>,
+            crate::xls_records::SharedStringTable,
+        ),
+        String,
+    > {
+        use crate::xls_records::{
+            BlankRecord, BoFRecord, BoolErrRecord, BoundSheetRecord, ContinueRecord,
+            DimensionsRecord, EofRecord, FormulaRecord, LabelSSTRecord, MulBlankRecord,
+            MulRkRecord, NumberRecord, ParsableRecord, ParseState, RKRecord, RowRecord,
+            SSTRecordData,
+        };
+        use byteorder::{LittleEndian, ReadBytesExt};
+
+        let mut state = ParseState::new();
+
+        loop {
+            // 读取记录头部
+            let record_type = match reader.read_u16::<LittleEndian>() {
+                Ok(rt) => rt,
+                Err(_) => break,
+            };
+
+            let length = match reader.read_u16::<LittleEndian>() {
+                Ok(len) => len as usize,
+                Err(_) => break,
+            };
+
+            // 读取记录数据
+            let mut data = vec![0u8; length];
+            if let Err(e) = reader.read_exact(&mut data) {
+                eprintln!("Warning: Failed to read record data: {}", e);
+                break;
+            }
+
+            // 匹配记录类型并应用
+            let result: Result<(), String> = (|| match record_type {
+                BoFRecord::RECORD_ID => BoFRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                EofRecord::RECORD_ID => {
+                    EofRecord::parse(&data)
+                        .map_err(|e| e.to_string())?
+                        .apply(&mut state)
+                        .map_err(|e| e.to_string())?;
+                    if state.is_complete {
+                        return Ok(());
+                    }
+                    Ok(())
+                }
+                SSTRecordData::RECORD_ID => SSTRecordData::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                ContinueRecord::RECORD_ID => ContinueRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                BoundSheetRecord::RECORD_ID => BoundSheetRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                RowRecord::RECORD_ID => RowRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                DimensionsRecord::RECORD_ID => DimensionsRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                NumberRecord::RECORD_ID => NumberRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                RKRecord::RECORD_ID => RKRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                BlankRecord::RECORD_ID => BlankRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                LabelSSTRecord::RECORD_ID => LabelSSTRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                MulRkRecord::RECORD_ID => MulRkRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                MulBlankRecord::RECORD_ID => MulBlankRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                BoolErrRecord::RECORD_ID => BoolErrRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                FormulaRecord::RECORD_ID => FormulaRecord::parse(&data)
+                    .map_err(|e| e.to_string())?
+                    .apply(&mut state)
+                    .map_err(|e| e.to_string()),
+                _ => Ok(()),
+            })();
+
+            if let Err(e) = result {
+                eprintln!(
+                    "Warning: Error processing record 0x{:04X}: {}",
+                    record_type, e
+                );
+                // Check if we need to break early due to completion
+                if record_type == EofRecord::RECORD_ID && state.is_complete {
+                    break;
+                }
+            }
+        }
+
+        // Finalize SST
+        if let Some(parser) = state.sst_parser.take() {
+            if let Err(e) = parser.finish(&mut state.sst) {
+                eprintln!("Warning: Failed to finish SST: {}", e);
+            }
+        }
+
+        // Add current sheet if any
+        if let Some(sheet) = state.current_sheet.take() {
+            state.sheets.push(sheet);
+        }
+
+        // 提取工作表名称和行数据
+        let sheet_names = state.sheet_names;
+        let sheets_data: Vec<Vec<Vec<Option<crate::Cell>>>> =
+            state.sheets.into_iter().map(|sheet| sheet.rows).collect();
+
+        Ok((sheet_names, sheets_data, state.sst))
+    }
+
+    /// 将 XLS 行数据转换为 WorkSheet
+    fn convert_to_worksheet(
+        sheet_name: &str,
+        rows: &[Vec<Option<crate::Cell>>],
+        read_sheet: Option<&ReadSheet>,
+        _sst: &crate::xls_records::SharedStringTable,
+    ) -> Result<WorkSheet, crate::error::XlsxError> {
+        use crate::cell::Cell;
+
+        let skip_rows = read_sheet.and_then(|r| r.skip_rows).unwrap_or(0);
+
+        // 检查是否有足够的数据
+        if rows.len() <= skip_rows + 1 {
+            return Err(crate::error::XlsxError::EmptyDataFrame);
+        }
+
+        let header_row_idx = skip_rows;
+        let max_cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
+
+        if max_cols == 0 {
+            return Err(crate::error::XlsxError::EmptyDataFrame);
+        }
+
+        // 构建 cells
+        let mut cells: Vec<Vec<Option<Cell>>> = Vec::new();
+
+        // 表头行
+        let header_row = &rows[header_row_idx];
+        let mut used_names: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
+        let header_cells: Vec<Option<Cell>> = (0..max_cols)
+            .map(|col_idx| {
+                let base_name = if let Some(Some(cell)) = header_row.get(col_idx) {
+                    match cell {
+                        crate::Cell::Text(s) if !s.is_empty() => s.clone(),
+                        crate::Cell::Number(n) => n.to_string(),
+                        crate::Cell::Boolean(b) => b.to_string(),
+                        _ => format!("Column_{}", col_idx),
+                    }
+                } else {
+                    format!("Column_{}", col_idx)
+                };
+
+                let count = used_names.entry(base_name.clone()).or_insert(0);
+                *count += 1;
+                let final_name = if *count > 1 {
+                    format!("{}_{}", base_name, *count)
+                } else {
+                    base_name
+                };
+
+                Some(Cell::Text(final_name))
+            })
+            .collect();
+        cells.push(header_cells);
+
+        // 数据行
+        for row_idx in (skip_rows + 1)..rows.len() {
+            let row = &rows[row_idx];
+            let cell_row: Vec<Option<Cell>> = (0..max_cols)
+                .map(|col_idx| {
+                    row.get(col_idx)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|cell| match cell {
+                            crate::Cell::Text(s) => Cell::Text(s.clone()),
+                            crate::Cell::Number(n) => Cell::Number(*n),
+                            crate::Cell::Boolean(b) => Cell::Boolean(*b),
+                        })
+                })
+                .collect();
+            cells.push(cell_row);
+        }
+
+        WorkSheet::new(cells, sheet_name.to_string(), None, None)
     }
 
     /// 注册或更新工作簿中的样式定义
@@ -482,9 +847,12 @@ impl Workbook {
     ///
     /// * `Ok(Workbook)` - 成功添加工作表后的工作簿实例
     /// * `Err(Box<dyn Error>)` - 添加过程中发生的错误
-    pub fn insert(mut self, df: DataFrame, name: Option<String>,
-                  style_map: Option<HashMap<(u32, u16), Arc<str>>>,
-                  merge_ranges: Option<Vec<(u32, u16, u32, u16)>>
+    pub fn insert(
+        mut self,
+        df: DataFrame,
+        name: Option<String>,
+        style_map: Option<HashMap<(u32, u16), Arc<str>>>,
+        merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
     ) -> Result<Self, Box<dyn Error>> {
         // 1. 定義輔助閉包：封裝默認命名邏輯，確保命名的一致性與唯一性起點
         let get_default_name = |sheets_len: usize| format!("Sheet {}", sheets_len + 1);
@@ -495,18 +863,23 @@ impl Workbook {
         // 3. 嘗試構建 WorkSheet 任務：
         // 這裡使用 match 進行細分錯誤處理。注意 df.clone() 是淺拷貝，開銷極低。
         // 這裡 clone() 是必須的，因為如果 InvalidName 發生，我們需要原始數據進行第二次嘗試。
-        let task = match WorkSheet::new(df.clone(), final_name.clone(), style_map.clone(), merge_ranges.clone()) {
+        let task = match WorkSheet::from_dataframe(
+            df.clone(),
+            final_name.clone(),
+            style_map.clone(),
+            merge_ranges.clone(),
+        ) {
             Ok(t) => t,
             // 規則 A (靜默跳過)：空表不具備導出意義，直接返回原始對象，不存入隊列
             // 对于空数据表采取宽容策略，避免不必要的错误
             Err(XlsxError::EmptyDataFrame) => return Ok(self),
             // 規則 B (自動修復)：名稱非法時，放棄用戶名稱，改用系統預設名稱重試
-            // 此時已知 df 不為空，第二次 new 操作是安全的
+            // 此時已知 df 不為空，第二次嘗試是安全的
             Err(XlsxError::InvalidName(_)) => {
                 // 使用默认名称重新尝试创建工作表
                 let fallback_name = get_default_name(self.sheets.len());
-                // 再次調用 new，此時使用安全名稱（已知 df 不為空，所以這次一定會 Ok）
-                WorkSheet::new(df, fallback_name, style_map, merge_ranges)?
+                // 再次調用 from_dataframe，此時使用安全名稱（已知 df 不為空，所以這次一定會 Ok）
+                WorkSheet::from_dataframe(df, fallback_name, style_map, merge_ranges)?
             }
             // 其他嚴重錯誤：直接包裝並向上拋出
             // 保留原始错误信息，便于问题诊断
@@ -558,7 +931,7 @@ impl Workbook {
         df: DataFrame,
         name: Option<String>,
         style_factory: Option<StyleFactory>,
-        merge_factory: Option<MergeFactory>
+        merge_factory: Option<MergeFactory>,
     ) -> Result<Self, Box<dyn Error>> {
         // 1. 執行样式工厂引擎：计算该 DataFrame 的物理样式地图
         // 产出类型为 HashMap<(u32, u16), Arc<str>>
@@ -598,19 +971,28 @@ impl Workbook {
     /// * `config`: 对 JSON 配置的不可变引用
     ///   - 包含样式规则定义和合并规则的结构化数据
     ///   - 支持 null 值，由工厂内部进行容错处理
-    pub fn insert_with_config(self, df: DataFrame, name: Option<String>, config: &serde_json::Value) -> Result<Self, Box<dyn Error>> {
+    pub fn insert_with_config(
+        self,
+        df: DataFrame,
+        name: Option<String>,
+        config: &serde_json::Value,
+    ) -> Result<Self, Box<dyn Error>> {
         // 直接傳入引用的片段（可能是 Null），Factory 內部會自我癒合
         let style_factory = match StyleFactory::new(config.clone()) {
             Ok(factory) => Some(factory),
-            Err(_) => None
+            Err(_) => None,
         };
         let merge_factory = match MergeFactory::new(config.clone()) {
             Ok(factory) => Some(factory),
-            Err(_) => None
+            Err(_) => None,
         };
 
         Ok(self.insert_with_factory(df, name, style_factory, merge_factory)?)
     }
+
+    // ------------------------------------------------------------------------
+    // 保存方法
+    // ------------------------------------------------------------------------
 
     /// 将工作簿保存为 Excel 文件
     ///
@@ -621,17 +1003,278 @@ impl Workbook {
     ///
     /// * `path`: 目标 Excel 文件的保存路径
     ///   - 可以是相对路径或绝对路径
-    ///   - 文件格式自动识别为 .xlsx
+    ///   - 文件格式根据扩展名自动识别（.xls 或 .xlsx）
     ///   - 如果文件已存在会被覆盖
     pub fn save(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        // 检测文件扩展名，.xls 使用 XlsWorkbook，其他使用 xlsx
+        let is_xls = path.to_lowercase().ends_with(".xls");
+
+        if is_xls {
+            self.save_as_xls(path)
+        } else {
+            self.save_as_xlsx(path)
+        }
+    }
+
+    /// 将工作簿保存为 .xls 格式（Excel 97-2003）
+    ///
+    /// 注意：此过程会丢失所有样式信息（style_map 被忽略）
+    ///
+    /// # 参数
+    /// * `path`: 目标文件路径
+    ///
+    /// # 返回值
+    /// * `Ok(())` - 保存成功
+    /// * `Err(Box<dyn Error>)` - 保存失败（空工作簿或写入错误）
+    fn save_as_xls(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        use cfb::CompoundFile;
+        use std::fs::File;
+        use std::io::Write;
+
+        // 检查是否有工作表
+        if self.sheets.is_empty() {
+            return Err("工作簿为空，没有可写入的工作表".into());
+        }
+
+        // 生成工作簿 BIFF 数据
+        let workbook_stream = self.generate_xls_biff_data()?;
+
+        // 写入 CFB 文件
+        let file = File::create(path)?;
+        let mut compound_file = CompoundFile::create(file)?;
+        let mut stream = compound_file.create_stream("Workbook")?;
+        stream.write_all(&workbook_stream)?;
+        stream.flush()?;
+        drop(stream);
+        drop(compound_file);
+
+        Ok(())
+    }
+
+    /// 生成 XLS 格式的 BIFF 数据
+    fn generate_xls_biff_data(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        use crate::xls_records::*;
+
+        // 第一步：创建共享字符串表
+        let mut sst = SharedStringTable::new();
+
+        // 第二步：生成每个工作表的 BIFF 数据
+        let sheet_biff_data: Vec<Vec<u8>> = self
+            .sheets
+            .iter()
+            .map(|sheet| sheet.to_biff_data(&mut sst))
+            .collect();
+
+        // 如果没有成功生成任何工作表数据，返回错误
+        if sheet_biff_data.is_empty() {
+            return Err("没有可写入的工作表".into());
+        }
+
+        let mut result = Vec::new();
+
+        // 第三步：写入 Workbook Globals 头部记录
+        let header_data = self.write_xls_workbook_headers();
+        let header_len = header_data.len();
+        result.extend_from_slice(&header_data);
+
+        // 第四步：创建 pending BOUNDSHEET 记录并计算大小
+        let mut pending_boundsheets: Vec<BoundSheetRecord> = self
+            .sheets
+            .iter()
+            .map(|sheet| BoundSheetRecord::new_pending(&sheet.name))
+            .collect();
+        let boundsheets_total_len: usize = pending_boundsheets
+            .iter()
+            .map(|r| r.serialize().len())
+            .sum();
+
+        // 第五步：计算 BOUNDSHEET 偏移
+        let sst_data = SSTRecord::from(&sst).serialize();
+        let eof_data = EofRecord::default().serialize();
+        let after_boundsheets_len = sst_data.len() + eof_data.len();
+
+        // 每个 sheet 的偏移 = header_len + boundsheets_total_len + after_boundsheets_len + 前面所有 sheet 数据长度之和
+        let mut current_offset =
+            (header_len + boundsheets_total_len + after_boundsheets_len) as u32;
+        for sheet_data in &sheet_biff_data {
+            current_offset += sheet_data.len() as u32;
+        }
+
+        // 从后往前设置偏移（因为 current_offset 现在是末尾位置）
+        for (i, sheet_data) in sheet_biff_data.iter().enumerate().rev() {
+            current_offset -= sheet_data.len() as u32;
+            pending_boundsheets[i].set_offset(current_offset);
+        }
+
+        // 第六步：写入带正确偏移的 BOUNDSHEET 记录
+        for boundsheet in &pending_boundsheets {
+            result.extend_from_slice(&boundsheet.serialize());
+        }
+
+        // 第七步：写入 SST
+        result.extend_from_slice(&sst_data);
+
+        // 第八步：写入 EOF（Workbook Globals 子流结束）
+        result.extend_from_slice(&eof_data);
+
+        // 第九步：写入工作表数据
+        for sheet_data in sheet_biff_data {
+            result.extend_from_slice(&sheet_data);
+        }
+
+        Ok(result)
+    }
+
+    /// 写入 Workbook Globals 头部记录（从 BOF 到 UseSelfs）
+    fn write_xls_workbook_headers(&self) -> Vec<u8> {
+        use crate::xls_records::*;
+        let mut result = Vec::new();
+
+        // BOF - Workbook globals
+        result.extend_from_slice(&BoFRecord::new(BofType::WorkbookGlobals).serialize());
+
+        // InterfaceHdr
+        result.extend_from_slice(&InterfaceHdrRecord::default().serialize());
+
+        // MMS
+        result.extend_from_slice(&MMSRecord::default().serialize());
+
+        // InterfaceEnd
+        result.extend_from_slice(&InterfaceEndRecord::default().serialize());
+
+        // WriteAccess
+        result.extend_from_slice(&WriteAccessRecord::new("yujitui").serialize());
+
+        // Codepage
+        result.extend_from_slice(&CodepageRecord::new().serialize());
+
+        // DSF
+        result.extend_from_slice(&DSFRecord::default().serialize());
+
+        // TabID
+        result.extend_from_slice(&TabIDRecord::new(self.sheets.len() as u16).serialize());
+
+        // FnGroupCount
+        result.extend_from_slice(&FnGroupCountRecord::default().serialize());
+
+        // Workbook Protection Block
+        result.extend_from_slice(&WindowProtectRecord::default().serialize());
+        result.extend_from_slice(&ProtectRecord::default().serialize());
+        result.extend_from_slice(&ObjectProtectRecord::default().serialize());
+        result.extend_from_slice(&PasswordRecord::default().serialize());
+        result.extend_from_slice(&Prot4RevRecord::default().serialize());
+        result.extend_from_slice(&Prot4RevPassRecord::default().serialize());
+
+        // Backup
+        result.extend_from_slice(&BackupRecord::default().serialize());
+
+        // HideObj
+        result.extend_from_slice(&HideObjRecord::default().serialize());
+
+        // Window1
+        result.extend_from_slice(&Window1Record::default().serialize());
+
+        // DateMode
+        result.extend_from_slice(&DateModeRecord::default().serialize());
+
+        // Precision
+        result.extend_from_slice(&PrecisionRecord::default().serialize());
+
+        // RefreshAll
+        result.extend_from_slice(&RefreshAllRecord::default().serialize());
+
+        // BookBool
+        result.extend_from_slice(&BookBoolRecord::default().serialize());
+
+        // Fonts (8 fonts: 4x Arial + 1x Times New Roman + 3x Arial)
+        result.extend_from_slice(&self.write_xls_default_fonts());
+
+        // Number Formats
+        result.extend_from_slice(&self.write_xls_default_formats());
+
+        // XF records
+        result.extend_from_slice(&self.write_xls_default_xf_records());
+
+        // Style
+        result.extend_from_slice(&StyleRecord::default().serialize());
+
+        // Palette
+        result.extend_from_slice(&PaletteRecord::default().serialize());
+
+        // UseSelfs
+        result.extend_from_slice(&UseSelfsRecord::default().serialize());
+
+        result
+    }
+
+    /// 写入默认字体记录
+    fn write_xls_default_fonts(&self) -> Vec<u8> {
+        use crate::xls_records::*;
+        let mut result = Vec::new();
+
+        for _ in 0..5 {
+            let font = Font::new("Arial");
+            result.extend_from_slice(&FontRecord::new(font).serialize());
+        }
+
+        let times = Font::new("Times New Roman").with_bold();
+        result.extend_from_slice(&FontRecord::new(times).serialize());
+
+        for _ in 0..2 {
+            let font = Font::new("Arial");
+            result.extend_from_slice(&FontRecord::new(font).serialize());
+        }
+
+        result
+    }
+
+    /// 写入默认数字格式记录
+    fn write_xls_default_formats(&self) -> Vec<u8> {
+        use crate::xls_records::*;
+        let mut result = Vec::new();
+
+        let general_format = NumberFormatRecord::new(0x00A4, "General");
+        result.extend_from_slice(&general_format.serialize());
+
+        result
+    }
+
+    /// 写入默认 XF 记录
+    fn write_xls_default_xf_records(&self) -> Vec<u8> {
+        use crate::xls_records::*;
+        let mut result = Vec::new();
+
+        // 使用 16 个默认 XF 记录（简化实现，全部是 Style XF）
+        for _ in 0..16 {
+            result.extend_from_slice(&XFRecord::default().serialize());
+        }
+
+        result
+    }
+
+    // ------------------------------------------------------------------------
+    // XLSX 格式专用方法
+    // ------------------------------------------------------------------------
+
+    /// 将工作簿保存为 .xlsx 格式（Excel 2007+）
+    ///
+    /// 保留所有样式信息
+    ///
+    /// # 参数
+    /// * `path`: 目标文件路径
+    ///
+    /// # 返回值
+    /// * `Ok(())` - 保存成功
+    /// * `Err(Box<dyn Error>)` - 保存失败
+    fn save_as_xlsx(&self, path: &str) -> Result<(), Box<dyn Error>> {
         // 创建新的 Excel 工作簿实例，作为导出的目标容器
         let mut workbook = rust_xlsxwriter::Workbook::new();
 
         // --- 1. 樣式池安全預取：---
         // fallback_fmt 用於解決 Rust 借用檢查器對臨時引用的限制。
         // default_fmt 是你在 new() 中定義的全局 UI 規範（如微軟雅黑+邊框）。
-        let fallback_fmt = Format::default();           // 系统回退样式（无样式）
-        let default_fmt = self.styles.get("default");   // 全局默认样式（基础格式）
+        let fallback_fmt = Format::default(); // 系统回退样式（无样式）
+        let default_fmt = self.styles.get("default"); // 全局默认样式（基础格式）
 
         // 遍历所有注册的工作表任务
         for sheet in &self.sheets {
@@ -640,126 +1283,104 @@ impl Workbook {
             // 设置工作表名称，支持中文和特殊字符（会进行验证）
             worksheet.set_name(sheet.name.as_str())?;
 
-            // 在写入数据前先应用合并区域
-            if let Some(merge_ranges) = &sheet.merge_ranges {
-                for merge_range in merge_ranges {
-                    // merge_range 包含四个元素：起始行、起始列、结束行、结束列
-                    // 第五、六个参数填写空白以获得这些空白单元格
-                    worksheet.merge_range(
-                        merge_range.0,  // first_row
-                        merge_range.1,  // first_col
-                        merge_range.2,  // last_row
-                        merge_range.3,  // last_col
-                        "",              // 数据为空白字符串
-                        &fallback_fmt,  // 使用标准样式保持一致性
+            // --- 0. 處理 Header 特殊區域 ---
+            let mut current_row: u32 = 0;
+            for region in &sheet.regions {
+                if matches!(region.region_type, crate::sheet_region::RegionType::Header) {
+                    current_row = self.write_region_to_worksheet(
+                        worksheet,
+                        region,
+                        current_row,
+                        &fallback_fmt,
                     )?;
                 }
             }
 
-            // 獲取 Polars 列引用，准备数据写入
-            let columns = sheet.df.columns();
-            // 遍历每一列进行数据处理
-            for (col_idx, column) in columns.iter().enumerate() {
-                let c = col_idx as u16;
+            // 计算主数据的起始行
+            let data_start_row = current_row;
 
-                // --- 2. 處理表頭 (Excel Row 0) ---
-                // 邏輯升級：
-                // 1. 優先查找 style_map 中的定義。
-                // 2. 如果 style_map 是 None，則自動應用預設的 "header" 樣式。
-                // 3. 如果以上皆否，則使用全局 "default"。
-                // 4. 最後使用系統 "fallback"。
-                // 四级样式查找机制确保表头样式的正确应用
-                let header_cell_fmt = sheet.style_map.as_ref()
-                    .and_then(|m| m.get(&(0, c)))         // 嘗試從地圖找特定单元格样式
-                    .and_then(|name| self.styles.get(name.as_ref()))  // 查找样式池中的实际样式
-                    .or_else(|| {                        // 如果地圖沒定義或地圖不存在
-                        if sheet.style_map.is_none() {
-                            self.styles.get("header")    // 自動應用預設 header 样式
-                        } else {
-                            None
-                        }
-                    })
-                    .or(default_fmt)                     // 全局保底样式
-                    .unwrap_or(&fallback_fmt);           // 系統保底样式
-                // 写入表头单元格，应用确定的样式
-                worksheet.write_with_format(0, c, column.name().as_str(), header_cell_fmt)?;
-
-                // --- 3. 處理數據行 (Excel Row 1..N) ---
-                // 遍历当前列的所有数据行
-                for row_idx in 0..sheet.df.height() {
-                    let val = column.get(row_idx)?; // 获取 AnyValue
-                    let r = (row_idx + 1) as u32;   // Excel 行索引（跳过表头）
-
-                    // 獲取該單元格專屬樣式或全局保底樣式
-                    // 使用与表头相同的四级查找机制
-                    let cell_fmt = sheet.style_map.as_ref()
-                        .and_then(|m| m.get(&(r, c)))     // 查找特定单元格样式
-                        .and_then(|name| self.styles.get(name.as_ref()))  // 获取实际样式
-                        .or(default_fmt)                 // 全局默认样式
-                        .unwrap_or(&fallback_fmt);       // 系统回退样式
-
-                    // --- 4. 類型分派：將 Polars 豐富的數值類型統化為 Excel 的 f64。 ---
-                    // 使用 _with_format 系列方法確保樣式（邊框、字體）被正確應用。
-                    match val {
-                        // 使用 _with_format 系列方法，傳入 cell_fmt (&Format)
-                        // 整数类型转换为 f64 写入
-                        AnyValue::Int8(v) => worksheet.write_number_with_format(r, c, v as f64, cell_fmt)?,
-                        AnyValue::Int16(v) => worksheet.write_number_with_format(r, c, v as f64, cell_fmt)?,
-                        AnyValue::Int32(v) => worksheet.write_number_with_format(r, c, v as f64, cell_fmt)?,
-                        AnyValue::Int64(v) => worksheet.write_number_with_format(r, c, v as f64, cell_fmt)?,
-                        AnyValue::UInt32(v) => worksheet.write_number_with_format(r, c, v as f64, cell_fmt)?,
-                        // 浮点数类型处理
-                        AnyValue::Float32(v) => worksheet.write_number_with_format(r, c, v as f64, cell_fmt)?,
-                        AnyValue::Float64(v) => worksheet.write_number_with_format(r, c, v, cell_fmt)?,
-                        // 字符串类型直接写入
-                        AnyValue::String(s) => worksheet.write_string_with_format(r, c, s, cell_fmt)?,
-                        // 布尔类型处理
-                        AnyValue::Boolean(v) => worksheet.write_boolean_with_format(r, c, v, cell_fmt)?,
-                        // 日期类型转换（天数偏移）
-                        AnyValue::Date(days) => {
-                            // 1. 转换基准：Polars 天数 + 25569 = Excel 天数
-                            let excel_date_num = (days as f64) + 25569.0;
-                            // 2. 在 Excel 中，日期本质上就是带格式的数字
-                            worksheet.write_number_with_format(r, c, excel_date_num, cell_fmt)?
-                        }
-                        // 日期时间类型转换（Unix 时间戳转换）
-                        AnyValue::Datetime(v, unit, _) => {
-                            // 根据时间单位转换为秒数
-                            let seconds = match unit {
-                                TimeUnit::Milliseconds => v / 1_000,
-                                TimeUnit::Microseconds => v / 1_000_000,
-                                TimeUnit::Nanoseconds => v / 1_000_000_000,
-                            } as f64;
-                            // 将 Unix 秒数转换为 Excel 天数：秒数 / 86400 + 25569
-                            let excel_dt_num = (seconds / 86400.0) + 25569.0;
-
-                            worksheet.write_number_with_format(r, c, excel_dt_num, cell_fmt)?
-                        }
-                        // 空值处理（保持样式一致性）
-                        AnyValue::Null => {
-                            // Null 值也寫入 blank 以保持單元格邊框一致
-                            worksheet.write_blank(r, c, cell_fmt)?
-                        },
-                        // 其他类型转换为字符串处理
-                        _ => {
-                            // 處理日期等類型，先轉為字符串
-                            let s = format!("{}", val);
-                            worksheet.write_string_with_format(r, c, &s, cell_fmt)?
-                        },
-                    };
+            // 在写入数据前先应用合并区域（注意：合并区域坐标是相对于主数据区域的）
+            if let Some(merge_ranges) = &sheet.merge_ranges {
+                for merge_range in merge_ranges {
+                    worksheet.merge_range(
+                        data_start_row + merge_range.0, // first_row（加上偏移）
+                        merge_range.1,                  // first_col
+                        data_start_row + merge_range.2, // last_row（加上偏移）
+                        merge_range.3,                  // last_col
+                        "",                             // 数据为空白字符串
+                        &fallback_fmt,                  // 使用标准样式保持一致性
+                    )?;
                 }
             }
 
-            // --- 5. 自動列寬適配：---
+            // --- 1. 遍历 cells 写入数据 ---
+            // sheet.cells[0] 是表头，sheet.cells[1..] 是数据
+            for (row_idx, row) in sheet.cells.iter().enumerate() {
+                let r = data_start_row + row_idx as u32;
+
+                for (col_idx, cell_opt) in row.iter().enumerate() {
+                    let c = col_idx as u16;
+
+                    // 获取单元格样式
+                    let cell_fmt = sheet
+                        .style_map
+                        .as_ref()
+                        .and_then(|m| m.get(&(row_idx as u32, c)))
+                        .and_then(|name| self.styles.get(name.as_ref()))
+                        .or_else(|| {
+                            // 表头行（row_idx == 0）自动应用 header 样式
+                            if row_idx == 0 && sheet.style_map.is_none() {
+                                self.styles.get("header")
+                            } else {
+                                None
+                            }
+                        })
+                        .or(default_fmt)
+                        .unwrap_or(&fallback_fmt);
+
+                    // 写入单元格
+                    if let Some(cell) = cell_opt {
+                        use crate::cell::Cell;
+                        match cell {
+                            Cell::Text(s) => {
+                                worksheet.write_with_format(r, c, s.as_str(), cell_fmt)?;
+                            }
+                            Cell::Number(n) => {
+                                worksheet.write_number_with_format(r, c, *n, cell_fmt)?;
+                            }
+                            Cell::Boolean(b) => {
+                                worksheet.write_boolean_with_format(r, c, *b, cell_fmt)?;
+                            }
+                        }
+                    } else {
+                        // 空单元格，写入 blank 保持样式一致性
+                        worksheet.write_blank(r, c, cell_fmt)?;
+                    }
+                }
+            }
+
+            // --- 5. 處理 Footer 特殊區域 ---
+            let mut footer_start_row = data_start_row + sheet.cells.len() as u32;
+            for region in &sheet.regions {
+                if matches!(region.region_type, crate::sheet_region::RegionType::Footer) {
+                    footer_start_row = self.write_region_to_worksheet(
+                        worksheet,
+                        region,
+                        footer_start_row,
+                        &fallback_fmt,
+                    )?;
+                }
+            }
+
+            // --- 6. 自動列寬適配：---
             // 必須在數據寫入完成後調用，確保 Excel 引擎能計算出最長內容的佔位。
-            worksheet.autofit();  // 自动调整列宽以适应内容
+            worksheet.autofit(); // 自动调整列宽以适应内容
         }
 
         // 将内存中的工作簿保存到指定路径的文件中
         workbook.save(path)?;
-        Ok(())  // 成功完成保存操作
+        Ok(()) // 成功完成保存操作
     }
-
 }
 
 impl fmt::Debug for Workbook {

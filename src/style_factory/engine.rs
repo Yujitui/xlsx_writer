@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::style_factory::{parse_criteria, StyleCondition, StyleFactoryError, StyleRule};
 use polars::datatypes::DataType;
 use polars::prelude::*;
-use crate::style_factory::{parse_criteria, StyleCondition, StyleFactoryError, StyleRule};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 樣式生成工廠
 ///
@@ -21,7 +21,6 @@ use crate::style_factory::{parse_criteria, StyleCondition, StyleFactoryError, St
 /// ## 可擴展架構
 /// 通過 [`StyleRule`] 的多態設計，支持靈活的條件判斷和樣式應用。
 pub struct StyleFactory {
-
     /// 規則集
     ///
     /// 存儲了從配置文件中加載的所有 [`StyleRule`] 實例。
@@ -37,11 +36,9 @@ pub struct StyleFactory {
     /// # 線程安全
     /// 規則集為只讀結構，可在多線程環境中安全共享。
     pub rules: Vec<StyleRule>,
-
 }
 
 impl StyleFactory {
-
     /// 創建新的樣式工廠實例
     ///
     /// 從 JSON 配置值解析樣式規則，構建 StyleFactory 實例。
@@ -115,7 +112,7 @@ impl StyleFactory {
         // 构建过程：标题行(false) + 数据行(col_mask结果)
         let other = BooleanChunked::from_iter(
             std::iter::once(Some(false)) // 标题行不受列条件影响，始终为 false
-                .chain(col_mask.into_iter()) // 数据行条件结果
+                .chain(col_mask.into_iter()), // 数据行条件结果
         );
 
         // 更新原始 mask：逻辑"与"操作实现条件合并
@@ -137,7 +134,11 @@ impl StyleFactory {
     ///
     /// * `Ok(BooleanChunked)` - 评估结果遮罩，true 表示匹配
     /// * `Err(StyleFactoryError)` - 评估过程中发生的错误
-    fn evaluate_conditions(&self, df: &DataFrame, conditions: &[StyleCondition]) -> Result<BooleanChunked, StyleFactoryError> {
+    fn evaluate_conditions(
+        &self,
+        df: &DataFrame,
+        conditions: &[StyleCondition],
+    ) -> Result<BooleanChunked, StyleFactoryError> {
         let height = df.height();
         // 1. 初始化全 true 遮罩：作為邏輯「與」運算的起點
         let mut full_mask = BooleanChunked::full("mask".into(), true, height + 1);
@@ -169,8 +170,11 @@ impl StyleFactory {
                             return Err(StyleFactoryError::IndexOutOfBounds(phys_idx, height));
                         }
                     }
-                    Ok::<BooleanChunked, StyleFactoryError>(BooleanChunked::from_slice("mask".into(), &mask))
-                },
+                    Ok::<BooleanChunked, StyleFactoryError>(BooleanChunked::from_slice(
+                        "mask".into(),
+                        &mask,
+                    ))
+                }
                 // B. 數值範圍：解析算子（如 ">"）並執行 Series 比較
                 StyleCondition::ValueRange { targets, criteria } => {
                     let (op, val) = parse_criteria(criteria);
@@ -180,13 +184,17 @@ impl StyleFactory {
                     let mut mask = BooleanChunked::new("mask".into(), &mask);
 
                     for col_name in targets {
-                        let col = df.column(col_name)
+                        let col = df
+                            .column(col_name)
                             .map_err(|_| StyleFactoryError::ColumnNotFound(col_name.clone()))?;
                         let series = col.as_materialized_series();
 
                         // 防禦性檢查：數值比較僅適用於數值類型列
                         if !series.dtype().is_numeric() {
-                            return Err(StyleFactoryError::TypeMismatch(col_name.clone(), format!("{:?}", series.dtype())));
+                            return Err(StyleFactoryError::TypeMismatch(
+                                col_name.clone(),
+                                format!("{:?}", series.dtype()),
+                            ));
                         }
 
                         // 構建與列類型一致的比較基準值（Literal）
@@ -203,7 +211,7 @@ impl StyleFactory {
                         Self::merge_mask(&mut mask, col_mask);
                     }
                     Ok::<BooleanChunked, StyleFactoryError>(mask)
-                },
+                }
                 // C. 集合匹配：利用 HashSet 實現 O(1) 的成員檢查
                 StyleCondition::Match { targets, criteria } => {
                     // 设置标题行为 false
@@ -212,10 +220,12 @@ impl StyleFactory {
                     let mut mask = BooleanChunked::new("mask".into(), &mask);
                     // 為了極致性能與穩定性，將基準列表轉為 HashSet
                     // 這樣在循環中查詢的時間複雜度是 O(1)
-                    let criteria_set: std::collections::HashSet<&str> = criteria.iter().map(|s| s.as_str()).collect();
+                    let criteria_set: std::collections::HashSet<&str> =
+                        criteria.iter().map(|s| s.as_str()).collect();
 
                     for col_name in targets {
-                        let col = df.column(col_name)
+                        let col = df
+                            .column(col_name)
                             .map_err(|_| StyleFactoryError::ColumnNotFound(col_name.clone()))?;
                         let series = col.as_materialized_series();
 
@@ -223,7 +233,8 @@ impl StyleFactory {
                         // 這對於 String 類型列最為直接
                         let col_mask: Vec<bool> = if series.dtype() == &DataType::String {
                             // 字符串列：直接利用 .str() 命名空間迭代
-                            series.str()
+                            series
+                                .str()
                                 .map_err(|e| StyleFactoryError::PolarsError(e))?
                                 .into_iter()
                                 .map(|opt_val| {
@@ -232,18 +243,21 @@ impl StyleFactory {
                                 .collect()
                         } else {
                             // 非字符串列：將數值轉為字符串標籤後匹配
-                            series.iter().map(|val| {
-                                let s = format!("{}", val);
-                                let s_clean = s.trim_matches('\"');
-                                criteria_set.contains(s_clean)
-                            }).collect()
+                            series
+                                .iter()
+                                .map(|val| {
+                                    let s = format!("{}", val);
+                                    let s_clean = s.trim_matches('\"');
+                                    criteria_set.contains(s_clean)
+                                })
+                                .collect()
                         };
                         // 5. 合併遮罩
                         // 将列匹配结果应用到最终结果（从索引1开始对应数据行）
                         Self::merge_mask(&mut mask, BooleanChunked::new("mask".into(), col_mask));
                     }
                     Ok::<BooleanChunked, StyleFactoryError>(mask)
-                },
+                }
                 // D. 字符串查找：調用 Polars 內建的 .str().contains()
                 StyleCondition::Find { targets, criteria } => {
                     // 设置标题行为 false
@@ -253,13 +267,17 @@ impl StyleFactory {
 
                     for col_name in targets {
                         // 2. 獲取 Column 並轉為 Series
-                        let col = df.column(col_name)
+                        let col = df
+                            .column(col_name)
                             .map_err(|_| StyleFactoryError::ColumnNotFound(col_name.clone()))?;
                         let series = col.as_materialized_series();
 
                         // 3. 穩健校驗：確保該列是字符串類型
                         if series.dtype() != &DataType::String {
-                            return Err(StyleFactoryError::TypeMismatch(col_name.clone(), format!("{:?}", series.dtype())));
+                            return Err(StyleFactoryError::TypeMismatch(
+                                col_name.clone(),
+                                format!("{:?}", series.dtype()),
+                            ));
                         }
 
                         // 4. 調用 .str() 命名空間的 contains 方法
@@ -275,18 +293,20 @@ impl StyleFactory {
                         Self::merge_mask(&mut mask, col_mask);
                     }
                     Ok::<BooleanChunked, StyleFactoryError>(mask)
-                },
+                }
                 // E. 列間相等：多列對等橫向比較
                 StyleCondition::Equal { targets, criteria } => {
                     let mut mask = vec![true; height + 1];
                     mask[0] = false; // 标题行不参与数值比较
                     let mut mask = BooleanChunked::new("mask".into(), &mask);
                     if targets.len() >= 2 {
-                        let first_series = df.column(&targets[0])
+                        let first_series = df
+                            .column(&targets[0])
                             .map_err(|_| StyleFactoryError::ColumnNotFound(targets[0].clone()))?
                             .as_materialized_series();
                         for col_name in &targets[1..] {
-                            let other_series = df.column(col_name)
+                            let other_series = df
+                                .column(col_name)
                                 .map_err(|_| StyleFactoryError::ColumnNotFound(col_name.clone()))?
                                 .as_materialized_series();
                             let col_mask = first_series
@@ -296,8 +316,8 @@ impl StyleFactory {
                             Self::merge_mask(&mut mask, col_mask);
                         }
                     }
-                    Ok::<BooleanChunked, StyleFactoryError>(if *criteria {mask} else { !mask })
-                },
+                    Ok::<BooleanChunked, StyleFactoryError>(if *criteria { mask } else { !mask })
+                }
                 // F. 索引排除：手動構建位圖（Bitmap），支持負數偏移
                 StyleCondition::ExcludeRows { criteria, .. } => {
                     // 创建结果容器：长度为 height + 1，标题行(0)默认为 true
@@ -341,7 +361,7 @@ impl StyleFactory {
                     }
 
                     Ok(BooleanChunked::from_slice("mask".into(), &mask))
-                },
+                }
             }?; // 透過 ? 解開分支 Result 並進行錯誤轉換
             full_mask = full_mask & mask;
         }
@@ -366,11 +386,23 @@ impl StyleFactory {
     ///   - 索引基于 0-based 系统
     ///   - u16 类型与 Excel 列地址系统对应
     /// * `Err(StyleFactoryError)` - 条件类型不匹配或其他错误
-    fn evaluate_col_indices(&self, df: &DataFrame, conditions: &[StyleCondition]) -> Result<Vec<u16>, StyleFactoryError> {
+    fn evaluate_col_indices(
+        &self,
+        df: &DataFrame,
+        conditions: &[StyleCondition],
+    ) -> Result<Vec<u16>, StyleFactoryError> {
         // 1. 嚴格檢查：禁止數據驅動型算子出現在列定義中
-        let has_data_op = conditions.iter().any(|c| matches!(c, StyleCondition::ValueRange{..} | StyleCondition::Equal{..}));
+        let has_data_op = conditions.iter().any(|c| {
+            matches!(
+                c,
+                StyleCondition::ValueRange { .. } | StyleCondition::Equal { .. }
+            )
+        });
         if has_data_op {
-            return Err(StyleFactoryError::TypeMismatch("列定位".into(), "數據算子".into()));
+            return Err(StyleFactoryError::TypeMismatch(
+                "列定位".into(),
+                "數據算子".into(),
+            ));
         }
 
         // 2. 獲取所有列名供匹配
@@ -388,7 +420,7 @@ impl StyleFactory {
                             }
                         }
                     }
-                },
+                }
                 // 通過物理位置匹配 (Index)
                 StyleCondition::Index { criteria, .. } => {
                     for &idx in criteria {
@@ -396,7 +428,7 @@ impl StyleFactory {
                             matched.insert(idx as u16);
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -418,7 +450,10 @@ impl StyleFactory {
     ///   - Key: (行索引, 列索引) - 基于 0-based 系统
     ///   - Value: Arc 包装的样式名称字符串
     /// * `Err(Box<dyn std::error::Error>)` - 执行过程中的任何错误
-    pub fn execute(&self, df: &DataFrame) -> Result<HashMap<(u32, u16), Arc<str>>, Box<dyn std::error::Error>> {
+    pub fn execute(
+        &self,
+        df: &DataFrame,
+    ) -> Result<HashMap<(u32, u16), Arc<str>>, Box<dyn std::error::Error>> {
         // 初始化样式映射表：存储 (行,列) -> 样式名称 的映射
         let mut style_map = HashMap::new();
         // 获取 DataFrame 列数，用于表头和整行样式应用
@@ -473,5 +508,4 @@ impl StyleFactory {
         }
         Ok(style_map)
     }
-
 }

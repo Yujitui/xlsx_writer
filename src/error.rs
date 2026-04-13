@@ -1,11 +1,29 @@
 use thiserror::Error;
 
+/// XLS 格式相关的错误类型
+#[derive(Error, Debug)]
+pub enum XlsError {
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Invalid file format: {0}")]
+    InvalidFormat(String),
+
+    #[error("String decoding failed: {0}")]
+    Encoding(String),
+
+    #[error("Cell index out of bounds: row={0}, col={1}")]
+    OutOfBounds(usize, usize),
+
+    #[error("Unexpected end of file")]
+    UnexpectedEof,
+}
+
 /// 導出 Excel 過程中的專用錯誤枚舉。
 ///
 /// 該枚舉涵蓋了從數據源校驗、業務邏輯衝突到物理磁盤 IO 的全鏈路異常。
 #[derive(Error, Debug)]
 pub enum XlsxError {
-
     /// Excel 文件为空或不含任何工作表
     #[error("Excel 文件未包含任何工作表")]
     NoSheetsFound,
@@ -60,4 +78,8 @@ pub enum XlsxError {
 
     #[error("合併引擎錯誤: {0}")]
     MergeError(#[from] crate::merge_factory::MergeFactoryError),
+
+    /// 通用的字符串錯誤訊息
+    #[error("{0}")]
+    GenericError(String),
 }
