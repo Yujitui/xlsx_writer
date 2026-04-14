@@ -1,0 +1,104 @@
+{
+  "_description": "完整复杂配置示例",
+  "_scenario": "多条件样式 + 部门合并 + 行高列宽 + 条件格式",
+  
+  "style_rules": [
+    {
+      "_comment": "表头样式",
+      "row_conditions": [
+        {"type": "index", "criteria": [0]}
+      ],
+      "apply": {
+        "style": "header"
+      }
+    },
+    {
+      "_comment": "技术部门蓝色背景",
+      "row_conditions": [
+        {"type": "match", "targets": ["部门"], "criteria": ["技术部"]}
+      ],
+      "apply": {
+        "style": "tech_dept"
+      }
+    },
+    {
+      "_comment": "销售部门且高销售额红色背景",
+      "row_conditions": [
+        {"type": "match", "targets": ["部门"], "criteria": ["销售部"]},
+        {"type": "value_range", "targets": ["销售额"], "criteria": ">50000"}
+      ],
+      "apply": {
+        "style": "sales_dept",
+        "overrides": [
+          {
+            "col_conditions": [
+              {"type": "match", "targets": ["销售额"], "criteria": ["销售额"]}
+            ],
+            "style": "high_sales"
+          }
+        ]
+      }
+    },
+    {
+      "_comment": "备注包含'紧急'的整行高亮",
+      "row_conditions": [
+        {"type": "find", "targets": ["备注"], "criteria": "紧急"}
+      ],
+      "apply": {
+        "style": "urgent_row"
+      }
+    }
+  ],
+  
+  "merge_rules": [
+    {
+      "_comment": "合并部门列",
+      "type": "vertical_match",
+      "targets": ["部门"]
+    },
+    {
+      "_comment": "合并小组列",
+      "type": "vertical_match",
+      "targets": ["小组"]
+    }
+  ],
+  
+  "dimension_rules": [
+    {
+      "_comment": "表头行高30",
+      "target": "row",
+      "condition": {
+        "type": "index",
+        "criteria": [0]
+      },
+      "value": {
+        "type": "fixed",
+        "value": 30.0
+      }
+    },
+    {
+      "_comment": "自动调整所有列宽",
+      "target": "column",
+      "condition": {
+        "type": "index",
+        "criteria": [0, 1, 2, 3, 4, 5, 6]
+      },
+      "value": {
+        "type": "auto"
+      }
+    },
+    {
+      "_comment": "备注列固定宽度50",
+      "target": "column",
+      "condition": {
+        "type": "match",
+        "targets": ["备注"],
+        "criteria": ["备注"]
+      },
+      "value": {
+        "type": "fixed",
+        "value": 50.0
+      }
+    }
+  ]
+}

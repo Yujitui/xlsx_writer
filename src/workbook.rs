@@ -8,6 +8,7 @@ use crate::cell::Cell;
 use crate::error::XlsxError;
 use crate::merge_factory::MergeFactory;
 use crate::prelude::ReadSheet;
+use crate::region_styles::RegionStyles;
 use crate::sheet_region::SheetRegion;
 use crate::style_factory::StyleFactory;
 use crate::style_library::StyleLibrary;
@@ -105,7 +106,7 @@ impl Workbook {
         self.sheets
             .get(index)
             .and_then(|sheet| sheet.regions.first())
-            .and_then(|region| region.styles())
+            .map(|region| region.cell_styles())
     }
 }
 
@@ -799,8 +800,7 @@ impl Workbook {
         mut self,
         df: DataFrame,
         name: Option<String>,
-        style_map: Option<HashMap<(u32, u16), Arc<str>>>,
-        merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
+        styles: RegionStyles,
     ) -> Result<Self, Box<dyn Error>> {
         // 1. 定義輔助閉包：封裝默認命名邏輯，確保命名的一致性與唯一性起點
         let get_default_name = |sheets_len: usize| format!("Sheet {}", sheets_len + 1);
@@ -815,8 +815,7 @@ impl Workbook {
             df.clone(),
             final_name.clone(),
             None, // 使用默认区域名称 "data"
-            style_map.clone(),
-            merge_ranges.clone(),
+            styles.clone(),
         ) {
             Ok(t) => t,
             // 規則 A (靜默跳過)：空表不具備導出意義，直接返回原始對象，不存入隊列
@@ -828,7 +827,7 @@ impl Workbook {
                 // 使用默认名称重新尝试创建工作表
                 let fallback_name = get_default_name(self.sheets.len());
                 // 再次調用 from_dataframe，此時使用安全名稱（已知 df 不為空，所以這次一定會 Ok）
-                WorkSheet::from_dataframe(df, fallback_name, None, style_map, merge_ranges)?
+                WorkSheet::from_dataframe(df, fallback_name, None, styles)?
             }
             // 其他嚴重錯誤：直接包裝並向上拋出
             // 保留原始错误信息，便于问题诊断
@@ -845,11 +844,9 @@ impl Workbook {
         // 確保數據在寫入時能找到對應的格式定義，防止 save 時出現懸空引用。
         // 检查所有区域的样式映射
         for region in &task.regions {
-            if let Some(map) = region.styles() {
-                for style_name in map.values() {
-                    if !self.styles.contains_key(style_name.as_ref()) {
-                        return Err(Box::new(XlsxError::UnknownStyle(style_name.clone())));
-                    }
+            for style_name in region.cell_styles().values() {
+                if !self.styles.contains_key(style_name.as_ref()) {
+                    return Err(Box::new(XlsxError::UnknownStyle(style_name.clone())));
                 }
             }
         }
@@ -885,26 +882,23 @@ impl Workbook {
         style_factory: Option<StyleFactory>,
         merge_factory: Option<MergeFactory>,
     ) -> Result<Self, Box<dyn Error>> {
-        // 1. 執行样式工厂引擎：计算该 DataFrame 的物理样式地图
+        // 1. 创建 RegionStyles 并执行样式工厂引擎
+        let mut styles = RegionStyles::new();
+
+        // 执行样式工厂引擎：计算该 DataFrame 的样式属性
         // 产出类型为 HashMap<(u32, u16), Arc<str>>
-        // 此步骤会进行样式规则评估和样式映射生成
-        let style_map = match style_factory {
-            Some(factory) => Some(factory.execute(&df)?),
-            None => None,
-        };
+        if let Some(factory) = style_factory {
+            styles.cell_styles = factory.execute(&df)?;
+        }
 
         // 2. 執行合并区域工厂引擎：计算该 DataFrame 的合并区域设置
         // 产出类型为 Vec<(u32, u16, u32, u16)>，表示四个角的坐标
-        // 此步骤会进行合并区域规则评估和合并区域生成
-        let merge_ranges = match merge_factory {
-            Some(factory) => Some(factory.execute(&df)?),
-            None => None,
-        };
+        if let Some(factory) = merge_factory {
+            styles.merge_ranges = factory.execute(&df)?;
+        }
 
         // 3. 调用原有的成品 insert 函数
-        // 注意：这里直接将计算好的 style_map 和 merge_ranges 传入
-        // 复用现有的工作表添加逻辑，确保行为一致性
-        self.insert(df, name, style_map, merge_ranges)
+        self.insert(df, name, styles)
     }
 
     /// 使用 JSON 配置向工作簿中添加带样式的工作表
@@ -1328,6 +1322,14 @@ impl Workbook {
                     }
                 }
 
+                // 应用行高设置（在数据写入之后）
+                if !region.styles.row_heights.is_empty() {
+                    for (row, height) in &region.styles.row_heights {
+                        let abs_row = row_offset + row;
+                        worksheet.set_row_height(abs_row, *height)?;
+                    }
+                }
+
                 // 更新当前行位置
                 row_offset += region.row_count() as u32;
             }
@@ -1337,9 +1339,31 @@ impl Workbook {
                 worksheet.merge_range(start_row, start_col, end_row, end_col, &content, style)?;
             }
 
-            // --- 自動列寬適配：---
-            // 必須在數據寫入完成後調用，確保 Excel 引擎能計算出最長內容的佔位。
-            worksheet.autofit(); // 自动调整列宽以适应内容
+            // --- 步骤4: 全局列宽处理 ---
+            // 收集所有列宽设置，冲突时取最大值
+            let mut col_width_settings: std::collections::HashMap<u16, f64> =
+                std::collections::HashMap::new();
+
+            for region in &sheet.regions {
+                if region.row_count() == 0 {
+                    continue;
+                }
+
+                for (col, width) in &region.styles.col_widths {
+                    col_width_settings
+                        .entry(*col)
+                        .and_modify(|e| *e = e.max(*width))
+                        .or_insert(*width);
+                }
+            }
+
+            // 先 autofit 所有列
+            worksheet.autofit();
+
+            // 然后覆盖指定列的宽度
+            for (col, width) in col_width_settings {
+                worksheet.set_column_width(col, width)?;
+            }
         }
 
         // 将内存中的工作簿保存到指定路径的文件中

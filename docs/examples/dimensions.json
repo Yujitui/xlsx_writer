@@ -1,0 +1,28 @@
+{
+  "_description": "行高列宽配置",
+  "_scenario": "表头固定行高30，自动调整所有列宽",
+  
+  "dimension_rules": [
+    {
+      "target": "row",
+      "condition": {
+        "type": "index",
+        "criteria": [0]
+      },
+      "value": {
+        "type": "fixed",
+        "value": 30.0
+      }
+    },
+    {
+      "target": "column",
+      "condition": {
+        "type": "index",
+        "criteria": [0, 1, 2, 3, 4, 5]
+      },
+      "value": {
+        "type": "auto"
+      }
+    }
+  ]
+}

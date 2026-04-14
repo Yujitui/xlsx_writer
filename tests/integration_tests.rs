@@ -8,12 +8,11 @@
 
 use polars::prelude::*;
 use serde_json::json;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use xlsx_writer::prelude::*;
-use xlsx_writer::{Cell, SheetRegion};
+use xlsx_writer::{Cell, RegionFactory, RegionStyles, SheetRegion};
 
 const DATA_DIR: &str = "data";
 const ASSETS_DIR: &str = "test_assets";
@@ -55,7 +54,7 @@ fn cleanup_old_files(prefix: &str) {
     }
 }
 
-/// 测试1：销售数据 + 样式工厂
+/// 测试1：销售数据 + RegionFactory（推荐使用）
 #[test]
 fn test_sales_with_styles() {
     setup();
@@ -79,21 +78,12 @@ fn test_sales_with_styles() {
     let config: serde_json::Value =
         serde_json::from_str(&config_str).expect("Failed to parse sales_styles.json");
 
-    // 创建 StyleFactory
-    let style_factory =
-        StyleFactory::new(config["style_rules"].clone()).expect("Failed to create StyleFactory");
-
-    // 创建样式库
-    let _style_library =
-        StyleLibrary::from_json(&config["styles"]).expect("Failed to create StyleLibrary");
-
-    // 执行样式规则
-    let style_map = style_factory
-        .execute(&df)
-        .expect("Failed to execute styles");
+    // 使用 RegionFactory 统一生成样式（推荐方式）
+    let factory = RegionFactory::from_json(&config).expect("Failed to create RegionFactory");
+    let styles = factory.execute(&df).expect("Failed to execute factory");
 
     // 创建 Region
-    let region = SheetRegion::from_dataframe(df, "sales_data", Some(true), Some(style_map), None)
+    let region = SheetRegion::from_dataframe(df, "sales_data", Some(true), styles)
         .expect("Failed to create SheetRegion");
 
     println!("\nRegion 可视化:");
@@ -148,19 +138,14 @@ fn test_dept_merge() {
     let config: serde_json::Value =
         serde_json::from_str(&config_str).expect("Failed to parse dept_merge.json");
 
-    // 创建 MergeFactory
-    let merge_factory =
-        MergeFactory::new(config["merge_rules"].clone()).expect("Failed to create MergeFactory");
+    // 使用 RegionFactory 统一生成样式和合并区域（推荐方式）
+    let factory = RegionFactory::from_json(&config).expect("Failed to create RegionFactory");
+    let styles = factory.execute(&df).expect("Failed to execute factory");
 
-    // 执行合并规则
-    let merge_ranges = merge_factory
-        .execute(&df)
-        .expect("Failed to execute merges");
-
-    println!("生成的合并区域: {:?}", merge_ranges);
+    println!("生成的合并区域: {:?}", styles.merge_ranges);
 
     // 创建 Region
-    let region = SheetRegion::from_dataframe(df, "dept_data", Some(true), None, Some(merge_ranges))
+    let region = SheetRegion::from_dataframe(df, "dept_data", Some(true), styles)
         .expect("Failed to create SheetRegion");
 
     println!("\nRegion 可视化:");
@@ -202,12 +187,12 @@ fn test_multi_region() {
 
     // Region 1: 报表标题
     let header_data = vec![vec![Some(Cell::Text("2024年第二季度销售报表".to_string()))]];
+    let mut title_styles = RegionStyles::new();
+    title_styles
+        .cell_styles
+        .insert((0, 0), std::sync::Arc::from("title"));
     let header_region = SheetRegion::new("header", header_data)
-        .with_style_map({
-            let mut map = std::collections::HashMap::new();
-            map.insert((0, 0), std::sync::Arc::from("title"));
-            map
-        })
+        .with_styles(title_styles)
         .with_merge_ranges(vec![(0, 0, 0, 3)]);
 
     // Region 2: 汇总数据
@@ -216,10 +201,11 @@ fn test_multi_region() {
         "数值" => &["1,250,000", "3,450", "362.32", "108.5%"]
     }
     .expect("Failed to create summary DataFrame");
-    let summary_region = SheetRegion::from_dataframe(summary_df, "summary", Some(true), None, None)
-        .expect("Failed to create summary region");
+    let summary_region =
+        SheetRegion::from_dataframe(summary_df, "summary", Some(true), RegionStyles::new())
+            .expect("Failed to create summary region");
 
-    // Region 3: 详细数据
+    // Region 3: 详细数据（带合并和复杂样式）
     let detail_df = df! {
         "日期" => &["2024-04-01", "2024-04-02", "2024-04-03", "2024-04-04", "2024-04-05"],
         "产品" => &["产品A", "产品B", "产品A", "产品C", "产品B"],
@@ -228,19 +214,16 @@ fn test_multi_region() {
     }
     .expect("Failed to create detail DataFrame");
 
-    // 为详细数据添加样式
-    let mut detail_styles = std::collections::HashMap::new();
-    detail_styles.insert((0, 0), std::sync::Arc::from("detail_header"));
-    detail_styles.insert((0, 1), std::sync::Arc::from("detail_header"));
-    detail_styles.insert((0, 2), std::sync::Arc::from("detail_header"));
-    detail_styles.insert((0, 3), std::sync::Arc::from("detail_header"));
-    // 高亮金额 > 50000 的行
-    detail_styles.insert((2, 3), std::sync::Arc::from("highlight"));
-    detail_styles.insert((4, 3), std::sync::Arc::from("highlight"));
+    let mut detail_styles = RegionStyles::new();
+    detail_styles
+        .cell_styles
+        .insert((2, 3), std::sync::Arc::from("highlight"));
+    detail_styles
+        .cell_styles
+        .insert((4, 3), std::sync::Arc::from("highlight"));
 
-    let detail_region =
-        SheetRegion::from_dataframe(detail_df, "detail", Some(true), Some(detail_styles), None)
-            .expect("Failed to create detail region");
+    let detail_region = SheetRegion::from_dataframe(detail_df, "detail", Some(true), detail_styles)
+        .expect("Failed to create detail region");
 
     // 创建样式库
     let styles = serde_json::json!({
@@ -335,25 +318,24 @@ fn test_full_config() {
         MergeFactory::new(config["merge_rules"].clone()).expect("Failed to create MergeFactory");
 
     // 执行规则
-    let style_map = style_factory
+    let cell_styles = style_factory
         .execute(&df)
         .expect("Failed to execute styles");
     let merge_ranges = merge_factory
         .execute(&df)
         .expect("Failed to execute merges");
 
-    println!("生成的样式条目数: {}", style_map.len());
+    println!("生成的样式条目数: {}", cell_styles.len());
     println!("生成的合并区域: {:?}", merge_ranges);
 
+    // 创建 RegionStyles
+    let mut styles = RegionStyles::new();
+    styles.cell_styles = cell_styles;
+    styles.merge_ranges = merge_ranges;
+
     // 创建 Region
-    let region = SheetRegion::from_dataframe(
-        df,
-        "project_data",
-        Some(true),
-        Some(style_map),
-        Some(merge_ranges),
-    )
-    .expect("Failed to create SheetRegion");
+    let region = SheetRegion::from_dataframe(df, "project_data", Some(true), styles)
+        .expect("Failed to create SheetRegion");
 
     println!("\nRegion 验证报告:");
     let issues = region.validate();
@@ -402,18 +384,12 @@ fn test_no_header() {
 
     // 创建显式样式映射，给第1行数据（原坐标，包含表头时）设置自定义样式
     // 当 include_header=false 时，这个样式会调整到第0行
-    let mut style_map = HashMap::new();
-    style_map.insert((1, 0), Arc::from("custom_data")); // 第1行数据（原坐标）
+    let mut styles = RegionStyles::new();
+    styles.cell_styles.insert((1, 0), Arc::from("custom_data")); // 第1行数据（原坐标）
 
     // 测试 include_header = false
-    let region = SheetRegion::from_dataframe(
-        df,
-        "no_header_data",
-        Some(false), // 无表头
-        Some(style_map),
-        None,
-    )
-    .expect("Failed to create SheetRegion");
+    let region = SheetRegion::from_dataframe(df, "no_header_data", Some(false), styles)
+        .expect("Failed to create SheetRegion");
 
     println!("无表头模式 Region:");
     println!("行数: {}", region.row_count());
@@ -465,10 +441,10 @@ fn test_complex_multi_sheet() {
 
     // Region 1: 标题（合并单元格）
     let title_data = vec![vec![Some(Cell::Text("2024年度综合报表".to_string()))]];
-    let mut title_styles = HashMap::new();
-    title_styles.insert((0, 0), Arc::from("title"));
+    let mut title_styles = RegionStyles::new();
+    title_styles.cell_styles.insert((0, 0), Arc::from("title"));
     let title_region = SheetRegion::new("title", title_data)
-        .with_style_map(title_styles)
+        .with_styles(title_styles)
         .with_merge_ranges(vec![(0, 0, 0, 5)]); // 合并6列
 
     // Region 2: 汇总统计（带条件样式）
@@ -478,8 +454,9 @@ fn test_complex_multi_sheet() {
     }
     .expect("Failed to create summary DataFrame");
 
-    let summary_region = SheetRegion::from_dataframe(summary_df, "summary", Some(true), None, None)
-        .expect("Failed to create summary region");
+    let summary_region =
+        SheetRegion::from_dataframe(summary_df, "summary", Some(true), RegionStyles::new())
+            .expect("Failed to create summary region");
 
     // Region 3: 详细数据（带合并和复杂样式）
     let detail_df = df! {
@@ -492,24 +469,27 @@ fn test_complex_multi_sheet() {
     }
     .expect("Failed to create detail DataFrame");
 
-    let mut detail_styles = HashMap::new();
+    let mut detail_styles = RegionStyles::new();
     // 高亮高销售额
-    detail_styles.insert((1, 2), Arc::from("high_sales")); // 上海 Q1
-    detail_styles.insert((4, 2), Arc::from("high_sales")); // 北京 Q1
-    detail_styles.insert((6, 2), Arc::from("high_sales")); // 深圳 Q1
+    detail_styles
+        .cell_styles
+        .insert((1, 2), Arc::from("high_sales")); // 上海 Q1
+    detail_styles
+        .cell_styles
+        .insert((4, 2), Arc::from("high_sales")); // 北京 Q1
+    detail_styles
+        .cell_styles
+        .insert((6, 2), Arc::from("high_sales")); // 深圳 Q1
 
-    let detail_region = SheetRegion::from_dataframe(
-        detail_df,
-        "detail",
-        Some(true),
-        Some(detail_styles),
-        Some(vec![
-            (1, 0, 3, 0), // 华东合并
-            (4, 0, 5, 0), // 华北合并
-            (6, 0, 8, 0), // 华南合并
-        ]),
-    )
-    .expect("Failed to create detail region");
+    // 将 merge_ranges 放入 detail_styles
+    detail_styles.merge_ranges = vec![
+        (1, 0, 3, 0), // 华东合并
+        (4, 0, 5, 0), // 华北合并
+        (6, 0, 8, 0), // 华南合并
+    ];
+
+    let detail_region = SheetRegion::from_dataframe(detail_df, "detail", Some(true), detail_styles)
+        .expect("Failed to create detail region");
 
     let sheet1 = WorkSheet::new(
         "综合报表",
@@ -529,26 +509,24 @@ fn test_complex_multi_sheet() {
     }
     .expect("Failed to create dept DataFrame");
 
-    let dept_region = SheetRegion::from_dataframe(
-        dept_df,
-        "dept",
-        Some(true),
-        None,
-        Some(vec![
-            (1, 0, 2, 0), // 技术部合并
-            (3, 0, 4, 0), // 销售部合并
-        ]),
-    )
-    .expect("Failed to create dept region");
+    // 创建包含 merge_ranges 的 RegionStyles
+    let mut dept_styles = RegionStyles::new();
+    dept_styles.merge_ranges = vec![
+        (1, 0, 2, 0), // 技术部合并
+        (3, 0, 4, 0), // 销售部合并
+    ];
+
+    let dept_region = SheetRegion::from_dataframe(dept_df, "dept", Some(true), dept_styles)
+        .expect("Failed to create dept region");
 
     // Region 2: 备注说明（合并单元格）
     let note_data = vec![vec![Some(Cell::Text(
         "注：以上数据截至2024年12月31日，未经审计。".to_string(),
     ))]];
-    let mut note_styles = HashMap::new();
-    note_styles.insert((0, 0), Arc::from("note"));
+    let mut note_styles = RegionStyles::new();
+    note_styles.cell_styles.insert((0, 0), Arc::from("note"));
     let note_region = SheetRegion::new("note", note_data)
-        .with_style_map(note_styles)
+        .with_styles(note_styles)
         .with_merge_ranges(vec![(0, 0, 0, 4)]);
 
     let sheet2 = WorkSheet::new("部门统计", vec![dept_region, note_region])
@@ -596,4 +574,239 @@ fn test_complex_multi_sheet() {
     println!("包含 2 个 Sheet，共 5 个 Region，多处样式和合并");
 
     cleanup_old_files("test_complex_multi_sheet");
+}
+
+#[cfg(test)]
+mod dimension_factory_tests {
+    use super::*;
+    use xlsx_writer::dimension_factory::DimensionFactory;
+
+    /// 测试基本的行高设置
+    #[test]
+    fn test_dimension_factory_fixed_row_height() {
+        let df = df! {
+            "name" => ["Alice", "Bob", "Charlie"],
+            "age" => [25, 30, 35]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "row",
+                "condition": {"type": "index", "criteria": [0, 2]},
+                "value": {"type": "fixed", "value": 30.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        assert_eq!(result.row_heights.len(), 2);
+        assert_eq!(result.row_heights.get(&0), Some(&30.0));
+        assert_eq!(result.row_heights.get(&2), Some(&30.0));
+        assert!(result.row_heights.get(&1).is_none());
+    }
+
+    /// 测试基本的列宽设置
+    #[test]
+    fn test_dimension_factory_fixed_col_width() {
+        let df = df! {
+            "name" => ["Alice", "Bob"],
+            "age" => [25, 30]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "column",
+                "condition": {"type": "index", "criteria": [0]},
+                "value": {"type": "fixed", "value": 20.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        assert_eq!(result.col_widths.len(), 1);
+        assert_eq!(result.col_widths.get(&0), Some(&20.0));
+        assert!(result.col_widths.get(&1).is_none());
+    }
+
+    /// 测试列宽 Auto 计算（中文宽度）
+    #[test]
+    fn test_dimension_factory_auto_col_width_chinese() {
+        // 使用较长的字符串以确保超过最小宽度（8.0）
+        // 中文：4个字符 * 2宽度 + 2padding = 10
+        // 英文：8个字符 * 1宽度 + 2padding = 10，但我们需要英文更短一些
+        let df = df! {
+            "name" => ["张三李四", "王五赵六"],  // 4个中文字符 = 8宽度
+            "code" => ["ABC", "DEF"]             // 3个英文字符 = 3宽度
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "column",
+                "condition": {"type": "index", "criteria": [0, 1]},
+                "value": {"type": "auto"}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        assert_eq!(result.col_widths.len(), 2);
+        // 中文字符应该比英文字符宽
+        // 中文列：8 + 2 = 10（超过最小值8）
+        // 英文列：3 + 2 = 5，被钳制到8
+        let chinese_width = result.col_widths.get(&0).expect("Missing column 0");
+        let english_width = result.col_widths.get(&1).expect("Missing column 1");
+        assert!(
+            chinese_width > english_width,
+            "Chinese column width ({}) should be greater than English column width ({})",
+            chinese_width,
+            english_width
+        );
+    }
+
+    /// 测试规则覆盖（后定义规则覆盖前面的规则）
+    #[test]
+    fn test_dimension_factory_rule_override() {
+        let df = df! {
+            "name" => ["Alice", "Bob"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "row",
+                "condition": {"type": "index", "criteria": [0]},
+                "value": {"type": "fixed", "value": 20.0}
+            },
+            {
+                "target": "row",
+                "condition": {"type": "index", "criteria": [0]},
+                "value": {"type": "fixed", "value": 30.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        // 后面的规则应该覆盖前面的
+        assert_eq!(result.row_heights.get(&0), Some(&30.0));
+    }
+
+    /// 测试负数索引
+    #[test]
+    fn test_dimension_factory_negative_index() {
+        let df = df! {
+            "name" => ["Alice", "Bob", "Charlie"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "row",
+                "condition": {"type": "index", "criteria": [-1]},
+                "value": {"type": "fixed", "value": 40.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        // -1 应该对应最后一行（索引 2，因为是 0-based）
+        assert_eq!(result.row_heights.get(&2), Some(&40.0));
+    }
+
+    /// 测试 Match 条件定位列
+    #[test]
+    fn test_dimension_factory_match_condition_for_column() {
+        let df = df! {
+            "user_name" => ["Alice", "Bob"],
+            "user_age" => [25, 30],
+            "dept" => ["IT", "HR"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "column",
+                "condition": {
+                    "type": "match",
+                    "targets": ["user_name", "user_age"],
+                    "criteria": ["user_name", "user_age"]
+                },
+                "value": {"type": "fixed", "value": 25.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        // Match 条件应该匹配列名
+        assert!(result.col_widths.get(&0).is_some()); // user_name
+        assert!(result.col_widths.get(&1).is_some()); // user_age
+        assert!(result.col_widths.get(&2).is_none()); // dept
+    }
+
+    /// 测试 ValueRange 条件在列宽规则中被静默忽略
+    #[test]
+    fn test_dimension_factory_value_range_ignored_for_column() {
+        let df = df! {
+            "age" => [25, 30, 35]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "column",
+                "condition": {
+                    "type": "value_range",
+                    "targets": ["age"],
+                    "criteria": ">30"
+                },
+                "value": {"type": "fixed", "value": 20.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        // ValueRange 在列宽规则中应该被静默忽略
+        assert!(result.col_widths.is_empty());
+    }
+
+    /// 测试空规则集
+    #[test]
+    fn test_dimension_factory_empty_rules() {
+        let df = df! {
+            "name" => ["Alice", "Bob"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let factory = DimensionFactory::new(json!([])).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        assert!(result.row_heights.is_empty());
+        assert!(result.col_widths.is_empty());
+    }
+
+    /// 测试 JSON 字符串创建工厂
+    #[test]
+    fn test_dimension_factory_from_json_str() {
+        let json_str = r#"[{"target": "row", "condition": {"type": "index", "criteria": [0]}, "value": {"type": "fixed", "value": 35.0}}]"#;
+
+        let factory = DimensionFactory::from_json_str(json_str).expect("Failed to create factory");
+
+        let df = df! {
+            "name" => ["Alice", "Bob"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        assert_eq!(result.row_heights.get(&0), Some(&35.0));
+    }
 }

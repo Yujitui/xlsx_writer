@@ -4,8 +4,8 @@
 //! - WorkSheet: 单个工作表的导出任务，由多个 SheetRegion 组成
 //! - 工作表名称验证机制
 
-use crate::cell::Cell;
 use crate::error::XlsxError;
+use crate::region_styles::RegionStyles;
 use crate::sheet_region::SheetRegion;
 use crate::xls_records::{
     row_data_to_cell_records, BiffRecord, BoFRecord, BofType, BottomMarginRecord, CalcCountRecord,
@@ -17,8 +17,7 @@ use crate::xls_records::{
     WorksheetWindowProtectRecord,
 };
 use polars::prelude::DataFrame;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{HashSet};
 
 /// Excel 工作表名称中禁止出现的特殊字符集合
 ///
@@ -104,13 +103,12 @@ impl WorkSheet {
         df: DataFrame,
         sheet_name: impl Into<String>,
         region_name: Option<String>,
-        style_map: Option<HashMap<(u32, u16), Arc<str>>>,
-        merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
+        styles: RegionStyles,
     ) -> Result<Self, XlsxError> {
         let region_name = region_name.unwrap_or_else(|| "data".to_string());
 
         // 使用 SheetRegion::from_dataframe 创建区域
-        let region = SheetRegion::from_dataframe(df, region_name, None, style_map, merge_ranges)?;
+        let region = SheetRegion::from_dataframe(df, region_name, None, styles)?;
 
         // 创建工作表
         Self::new(sheet_name, vec![region])
@@ -284,6 +282,7 @@ impl WorkSheet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell::Cell;
     use polars::prelude::NamedFrom;
     use polars::prelude::Series;
 
@@ -329,7 +328,7 @@ mod tests {
         ];
         let df = DataFrame::new(2, columns).unwrap();
 
-        let sheet = WorkSheet::from_dataframe(df, "Test", None, None, None).unwrap();
+        let sheet = WorkSheet::from_dataframe(df, "Test", None, RegionStyles::new()).unwrap();
 
         assert_eq!(sheet.name, "Test");
         assert_eq!(sheet.regions.len(), 1);

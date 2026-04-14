@@ -3,7 +3,7 @@ use serde::Deserialize;
 /// 定義單元格或行的命中邏輯。
 ///
 /// 採用 `snake_case` 命名規範（如 `value_range`），並透過 `type` 字段進行多態分發。
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StyleCondition {
     /// 1. 物理位置定位。

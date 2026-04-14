@@ -1,0 +1,26 @@
+{
+  "_description": "合并单元格配置",
+  "_scenario": "纵向合并相同部门，横向合并表头",
+  
+  "style_rules": [
+    {
+      "row_conditions": [
+        {"type": "index", "criteria": [0]}
+      ],
+      "apply": {
+        "style": "header"
+      }
+    }
+  ],
+  
+  "merge_rules": [
+    {
+      "type": "vertical_match",
+      "targets": ["部门"]
+    },
+    {
+      "type": "vertical_match",
+      "targets": ["小组"]
+    }
+  ]
+}

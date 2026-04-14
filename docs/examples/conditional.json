@@ -1,0 +1,47 @@
+{
+  "_description": "条件格式配置 - 根据数值自动应用不同样式",
+  "_scenario": "销售额大于50000显示红色，小于10000显示绿色",
+  
+  "style_rules": [
+    {
+      "row_conditions": [
+        {"type": "index", "criteria": [0]}
+      ],
+      "apply": {
+        "style": "header"
+      }
+    },
+    {
+      "row_conditions": [
+        {"type": "value_range", "targets": ["销售额"], "criteria": ">50000"}
+      ],
+      "apply": {
+        "style": "normal_row",
+        "overrides": [
+          {
+            "col_conditions": [
+              {"type": "match", "targets": ["销售额"], "criteria": ["销售额"]}
+            ],
+            "style": "high_value"
+          }
+        ]
+      }
+    },
+    {
+      "row_conditions": [
+        {"type": "value_range", "targets": ["销售额"], "criteria": "<10000"}
+      ],
+      "apply": {
+        "style": "normal_row",
+        "overrides": [
+          {
+            "col_conditions": [
+              {"type": "match", "targets": ["销售额"], "criteria": ["销售额"]}
+            ],
+            "style": "low_value"
+          }
+        ]
+      }
+    }
+  ]
+}

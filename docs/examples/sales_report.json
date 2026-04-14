@@ -1,0 +1,169 @@
+{
+  "_description": "完整的实战示例：销售报表",
+  "_comment": "展示如何使用 styles 定义样式库，并在 style_rules 中引用",
+
+  "styles": {
+    "report_title": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 16,
+      "bold": true,
+      "bg_color": "#1F4E78",
+      "font_color": "#FFFFFF",
+      "align": "center",
+      "valign": "middle"
+    },
+    "table_header": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 11,
+      "bold": true,
+      "bg_color": "#D9E1F2",
+      "align": "center",
+      "valign": "middle",
+      "border": "thin",
+      "border_color": "#000000"
+    },
+    "table_data": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 10,
+      "border_left": {"style": "thin", "color": "#CCCCCC"},
+      "border_right": {"style": "thin", "color": "#CCCCCC"},
+      "border_top": {"style": "thin", "color": "#CCCCCC"},
+      "border_bottom": {"style": "thin", "color": "#CCCCCC"}
+    },
+    "table_data_alt": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 10,
+      "bg_color": "#F2F2F2",
+      "border_left": {"style": "thin", "color": "#CCCCCC"},
+      "border_right": {"style": "thin", "color": "#CCCCCC"},
+      "border_top": {"style": "thin", "color": "#CCCCCC"},
+      "border_bottom": {"style": "thin", "color": "#CCCCCC"}
+    },
+    "currency": {
+      "num_format": "¥#,##0.00",
+      "align": "right",
+      "font_color": "#C65911"
+    },
+    "percentage": {
+      "num_format": "0.00%",
+      "align": "center"
+    },
+    "high_sales": {
+      "bg_color": "#FFC7CE",
+      "font_color": "#9C0006",
+      "bold": true
+    },
+    "low_sales": {
+      "bg_color": "#C6EFCE",
+      "font_color": "#006100"
+    },
+    "summary": {
+      "font_name": "Microsoft YaHei",
+      "font_size": 11,
+      "bold": true,
+      "bg_color": "#FFF2CC",
+      "border_top": {"style": "medium", "color": "#000000"}
+    }
+  },
+
+  "style_rules": [
+    {
+      "_comment": "第1行：报表标题",
+      "row_conditions": [{"type": "index", "criteria": [0]}],
+      "apply": {"style": "report_title"}
+    },
+    {
+      "_comment": "第2行：表头",
+      "row_conditions": [{"type": "index", "criteria": [1]}],
+      "apply": {"style": "table_header"}
+    },
+    {
+      "_comment": "奇数行数据（3, 5, 7...）：使用 data 样式",
+      "row_conditions": [{"type": "index", "criteria": [2, 4, 6, 8, 10, 12, 14, 16, 18, 20]}],
+      "apply": {
+        "style": "table_data",
+        "overrides": [
+          {
+            "col_conditions": [{"type": "match", "targets": ["销售额"], "criteria": ["销售额"]}],
+            "style": "currency"
+          },
+          {
+            "col_conditions": [{"type": "match", "targets": ["完成率"], "criteria": ["完成率"]}],
+            "style": "percentage"
+          }
+        ]
+      }
+    },
+    {
+      "_comment": "偶数行数据（4, 6, 8...）：使用 data_alt 样式（隔行变色）",
+      "row_conditions": [{"type": "index", "criteria": [3, 5, 7, 9, 11, 13, 15, 17, 19, 21]}],
+      "apply": {
+        "style": "table_data_alt",
+        "overrides": [
+          {
+            "col_conditions": [{"type": "match", "targets": ["销售额"], "criteria": ["销售额"]}],
+            "style": "currency"
+          },
+          {
+            "col_conditions": [{"type": "match", "targets": ["完成率"], "criteria": ["完成率"]}],
+            "style": "percentage"
+          }
+        ]
+      }
+    },
+    {
+      "_comment": "高销售额（>50000）：整行高亮",
+      "row_conditions": [
+        {"type": "value_range", "targets": ["销售额"], "criteria": ">50000"}
+      ],
+      "apply": {
+        "style": "high_sales"
+      }
+    },
+    {
+      "_comment": "低销售额（<10000）：整行绿色标记",
+      "row_conditions": [
+        {"type": "value_range", "targets": ["销售额"], "criteria": "<10000"}
+      ],
+      "apply": {
+        "style": "low_sales"
+      }
+    },
+    {
+      "_comment": "合计行",
+      "row_conditions": [
+        {"type": "find", "targets": ["姓名"], "criteria": "合计"}
+      ],
+      "apply": {"style": "summary"}
+    }
+  ],
+
+  "merge_rules": [
+    {
+      "_comment": "合并部门列",
+      "type": "vertical_match",
+      "targets": ["部门"]
+    }
+  ],
+
+  "dimension_rules": [
+    {
+      "_comment": "标题行高40",
+      "target": "row",
+      "condition": {"type": "index", "criteria": [0]},
+      "value": {"type": "fixed", "value": 40.0}
+    },
+    {
+      "_comment": "表头行高30",
+      "target": "row",
+      "condition": {"type": "index", "criteria": [1]},
+      "value": {"type": "fixed", "value": 30.0}
+    },
+    {
+      "_comment": "自动调整所有列宽",
+      "target": "column",
+      "condition": {"type": "index", "criteria": [0, 1, 2, 3, 4, 5, 6]},
+      "value": {"type": "auto"}
+    }
+  ]
+}

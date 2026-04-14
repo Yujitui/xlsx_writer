@@ -1,0 +1,23 @@
+{
+  "_description": "基础表格样式配置",
+  "_scenario": "简单的表头样式 + 数据边框",
+  
+  "style_rules": [
+    {
+      "row_conditions": [
+        {"type": "index", "criteria": [0]}
+      ],
+      "apply": {
+        "style": "header"
+      }
+    },
+    {
+      "row_conditions": [
+        {"type": "index", "criteria": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}
+      ],
+      "apply": {
+        "style": "data"
+      }
+    }
+  ]
+}

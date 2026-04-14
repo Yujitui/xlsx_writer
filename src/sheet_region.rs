@@ -5,6 +5,7 @@
 
 use crate::cell::Cell;
 use crate::error::XlsxError;
+use crate::region_styles::RegionStyles;
 use polars::prelude::{DataFrame, Series};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,8 +15,7 @@ use std::sync::Arc;
 pub struct SheetRegion {
     pub name: String,
     pub data: Vec<Vec<Option<Cell>>>,
-    style_map: Option<HashMap<(u32, u16), Arc<str>>>,
-    merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
+    pub styles: RegionStyles,
 }
 
 impl SheetRegion {
@@ -23,8 +23,7 @@ impl SheetRegion {
         SheetRegion {
             name: name.into(),
             data,
-            style_map: None,
-            merge_ranges: None,
+            styles: RegionStyles::new(),
         }
     }
 
@@ -32,18 +31,17 @@ impl SheetRegion {
         SheetRegion {
             name: name.into(),
             data: Vec::new(),
-            style_map: None,
-            merge_ranges: None,
+            styles: RegionStyles::new(),
         }
     }
 
-    pub fn with_style_map(mut self, style_map: HashMap<(u32, u16), Arc<str>>) -> Self {
-        self.style_map = Some(style_map);
+    pub fn with_styles(mut self, styles: RegionStyles) -> Self {
+        self.styles = styles;
         self
     }
 
     pub fn with_merge_ranges(mut self, merge_ranges: Vec<(u32, u16, u32, u16)>) -> Self {
-        self.merge_ranges = Some(merge_ranges);
+        self.styles.merge_ranges = merge_ranges;
         self
     }
 
@@ -121,8 +119,7 @@ impl SheetRegion {
         df: DataFrame,
         name: impl Into<String>,
         include_header: Option<bool>,
-        style_map: Option<HashMap<(u32, u16), Arc<str>>>,
-        merge_ranges: Option<Vec<(u32, u16, u32, u16)>>,
+        mut styles: RegionStyles,
     ) -> Result<Self, XlsxError> {
         if df.height() == 0 || df.width() == 0 {
             return Err(XlsxError::EmptyDataFrame);
@@ -163,36 +160,15 @@ impl SheetRegion {
             cells.push(row);
         }
 
-        let (final_style_map, final_merge_ranges) = if include_header {
-            (style_map, merge_ranges)
-        } else {
-            // 当 include_header=false 时，所有坐标需要减1（因为删除了表头行）
-            // 但 row=0 的样式现在是给第0行数据的，不应该被过滤
-            let adjusted_style_map = style_map.map(|map| {
-                map.into_iter()
-                    .filter(|((row, _), _)| *row != 0) // 删除原来表头(row=0)的样式
-                    .map(|((row, col), style)| ((row - 1, col), style)) // 数据行坐标减1
-                    .collect()
-            });
-
-            let adjusted_merge_ranges = merge_ranges.map(|ranges| {
-                ranges
-                    .into_iter()
-                    .filter(|(start_row, _, _, _)| *start_row != 0) // 删除涉及表头的合并
-                    .map(|(start_row, start_col, end_row, end_col)| {
-                        (start_row - 1, start_col, end_row - 1, end_col) // 坐标减1
-                    })
-                    .collect()
-            });
-
-            (adjusted_style_map, adjusted_merge_ranges)
-        };
+        // 如果不包含表头，调整所有坐标
+        if !include_header {
+            styles.adjust_coordinates();
+        }
 
         Ok(SheetRegion {
             name: name.into(),
             data: cells,
-            style_map: final_style_map,
-            merge_ranges: final_merge_ranges,
+            styles,
         })
     }
 
@@ -202,29 +178,23 @@ impl SheetRegion {
         if row_usize >= self.data.len() || col_usize >= self.data[row_usize].len() {
             return;
         }
-        let style_map = self.style_map.get_or_insert_with(HashMap::new);
-        style_map.insert((row, col), style.into());
+        self.styles.cell_styles.insert((row, col), style.into());
     }
 
     pub fn clear_style(&mut self, row: u32, col: u16) {
-        if let Some(style_map) = &mut self.style_map {
-            style_map.remove(&(row, col));
-            if style_map.is_empty() {
-                self.style_map = None;
-            }
-        }
+        self.styles.cell_styles.remove(&(row, col));
     }
 
     pub fn clear_all_styles(&mut self) {
-        self.style_map = None;
+        self.styles.cell_styles.clear();
     }
 
     pub fn get_style(&self, row: u32, col: u16) -> Option<&Arc<str>> {
-        self.style_map.as_ref().and_then(|map| map.get(&(row, col)))
+        self.styles.cell_styles.get(&(row, col))
     }
 
-    pub fn styles(&self) -> Option<&HashMap<(u32, u16), Arc<str>>> {
-        self.style_map.as_ref()
+    pub fn cell_styles(&self) -> &HashMap<(u32, u16), Arc<str>> {
+        &self.styles.cell_styles
     }
 
     pub fn add_merge(&mut self, start_row: u32, start_col: u16, end_row: u32, end_col: u16) {
@@ -234,7 +204,6 @@ impl SheetRegion {
         let start_row_usize = start_row as usize;
         let end_row_usize = end_row as usize;
         let start_col_usize = start_col as usize;
-        let _end_col_usize = end_col as usize;
         if start_row_usize >= self.data.len() {
             return;
         }
@@ -245,23 +214,21 @@ impl SheetRegion {
         if end_row_usize >= self.data.len() {
             return;
         }
-        let merges = self.merge_ranges.get_or_insert_with(Vec::new);
-        merges.push((start_row, start_col, end_row, end_col));
+        self.styles
+            .merge_ranges
+            .push((start_row, start_col, end_row, end_col));
     }
 
     pub fn clear_merge_at(&mut self, row: u32, col: u16) {
-        if let Some(merges) = &mut self.merge_ranges {
-            merges.retain(|(start_row, start_col, end_row, end_col)| {
+        self.styles
+            .merge_ranges
+            .retain(|(start_row, start_col, end_row, end_col)| {
                 !(row >= *start_row && row <= *end_row && col >= *start_col && col <= *end_col)
             });
-            if merges.is_empty() {
-                self.merge_ranges = None;
-            }
-        }
     }
 
     pub fn clear_all_merges(&mut self) {
-        self.merge_ranges = None;
+        self.styles.merge_ranges.clear();
     }
 
     pub fn is_merged(&self, row: u32, col: u16) -> bool {
@@ -269,22 +236,24 @@ impl SheetRegion {
     }
 
     pub fn get_merge(&self, row: u32, col: u16) -> Option<(u32, u16, u32, u16)> {
-        self.merge_ranges.as_ref().and_then(|merges| {
-            merges
-                .iter()
-                .find_map(|(start_row, start_col, end_row, end_col)| {
-                    if row >= *start_row && row <= *end_row && col >= *start_col && col <= *end_col
-                    {
-                        Some((*start_row, *start_col, *end_row, *end_col))
-                    } else {
-                        None
-                    }
-                })
-        })
+        self.styles
+            .merge_ranges
+            .iter()
+            .find_map(|(start_row, start_col, end_row, end_col)| {
+                if row >= *start_row && row <= *end_row && col >= *start_col && col <= *end_col {
+                    Some((*start_row, *start_col, *end_row, *end_col))
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn merges(&self) -> Option<&Vec<(u32, u16, u32, u16)>> {
-        self.merge_ranges.as_ref()
+        if self.styles.merge_ranges.is_empty() {
+            None
+        } else {
+            Some(&self.styles.merge_ranges)
+        }
     }
 
     pub fn visualize(&self) -> String {
@@ -363,8 +332,8 @@ impl SheetRegion {
             self.name,
             self.row_count(),
             self.col_count(),
-            self.style_map.as_ref().map(|m| m.len()).unwrap_or(0),
-            self.merge_ranges.as_ref().map(|m| m.len()).unwrap_or(0)
+            self.styles.cell_styles.len(),
+            self.styles.merge_ranges.len()
         )
     }
 
@@ -382,31 +351,44 @@ impl SheetRegion {
             issues.push("Region has no columns".to_string());
         }
 
-        if let Some(style_map) = &self.style_map {
-            for ((row, col), _) in style_map.iter() {
-                let row_usize = *row as usize;
-                let col_usize = *col as usize;
-                if row_usize >= row_count {
-                    issues.push(format!("Style at out-of-bounds row: ({}, {})", row, col));
-                } else if col_usize >= self.data[row_usize].len() {
-                    issues.push(format!("Style at out-of-bounds col: ({}, {})", row, col));
-                }
+        for ((row, col), _) in self.styles.cell_styles.iter() {
+            let row_usize = *row as usize;
+            let col_usize = *col as usize;
+            if row_usize >= row_count {
+                issues.push(format!("Style at out-of-bounds row: ({}, {})", row, col));
+            } else if col_usize >= self.data[row_usize].len() {
+                issues.push(format!("Style at out-of-bounds col: ({}, {})", row, col));
             }
         }
 
-        if let Some(merges) = &self.merge_ranges {
-            for (i, (start_row, start_col, end_row, end_col)) in merges.iter().enumerate() {
-                if start_row > end_row || start_col > end_col {
-                    issues.push(format!(
-                        "Merge {} has invalid range: ({},{})-({},{})",
-                        i, start_row, start_col, end_row, end_col
-                    ));
-                }
-                let start_row_usize = *start_row as usize;
-                let end_row_usize = *end_row as usize;
-                if start_row_usize >= row_count || end_row_usize >= row_count {
-                    issues.push(format!("Merge {} is out of row bounds", i));
-                }
+        for (i, (start_row, _start_col, end_row, _end_col)) in
+            self.styles.merge_ranges.iter().enumerate()
+        {
+            if start_row > end_row {
+                issues.push(format!(
+                    "Merge {} has invalid range: start_row > end_row",
+                    i
+                ));
+            }
+            let start_row_usize = *start_row as usize;
+            let end_row_usize = *end_row as usize;
+            if start_row_usize >= row_count || end_row_usize >= row_count {
+                issues.push(format!("Merge {} is out of row bounds", i));
+            }
+        }
+
+        // 校验 row_heights
+        for (row, _) in self.styles.row_heights.iter() {
+            if (*row as usize) >= row_count {
+                issues.push(format!("Row height at out-of-bounds row: {}", row));
+            }
+        }
+
+        // 校验 col_widths
+        let col_count = self.col_count() as u16;
+        for (col, _) in self.styles.col_widths.iter() {
+            if *col >= col_count {
+                issues.push(format!("Column width at out-of-bounds col: {}", col));
             }
         }
 
@@ -421,45 +403,62 @@ impl SheetRegion {
             return vec!["Region is empty, nothing to fix".to_string()];
         }
 
-        if let Some(style_map) = &mut self.style_map {
-            let before_count = style_map.len();
-            style_map.retain(|(row, col), _| {
-                let row_usize = *row as usize;
-                let col_usize = *col as usize;
-                row_usize < row_count && col_usize < self.data[row_usize].len()
-            });
-            let after_count = style_map.len();
-            if before_count != after_count {
-                fixes.push(format!(
-                    "Removed {} out-of-bounds styles",
-                    before_count - after_count
-                ));
-            }
-            if style_map.is_empty() {
-                self.style_map = None;
-            }
+        let before_count = self.styles.cell_styles.len();
+        self.styles.cell_styles.retain(|(row, col), _| {
+            let row_usize = *row as usize;
+            let col_usize = *col as usize;
+            row_usize < row_count && col_usize < self.data[row_usize].len()
+        });
+        let after_count = self.styles.cell_styles.len();
+        if before_count != after_count {
+            fixes.push(format!(
+                "Removed {} out-of-bounds styles",
+                before_count - after_count
+            ));
         }
 
-        if let Some(merges) = &mut self.merge_ranges {
-            let before_count = merges.len();
-            merges.retain(|(start_row, start_col, end_row, end_col)| {
-                if start_row > end_row || start_col > end_col {
+        let before_count = self.styles.merge_ranges.len();
+        self.styles
+            .merge_ranges
+            .retain(|(start_row, _start_col, end_row, _end_col)| {
+                if start_row > end_row {
                     return false;
                 }
                 let start_row_usize = *start_row as usize;
                 let end_row_usize = *end_row as usize;
                 start_row_usize < row_count && end_row_usize < row_count
             });
-            let after_count = merges.len();
-            if before_count != after_count {
-                fixes.push(format!(
-                    "Removed {} invalid merges",
-                    before_count - after_count
-                ));
-            }
-            if merges.is_empty() {
-                self.merge_ranges = None;
-            }
+        let after_count = self.styles.merge_ranges.len();
+        if before_count != after_count {
+            fixes.push(format!(
+                "Removed {} invalid merges",
+                before_count - after_count
+            ));
+        }
+
+        // 修复越界的 row_heights
+        let before_count = self.styles.row_heights.len();
+        self.styles
+            .row_heights
+            .retain(|row, _| (*row as usize) < row_count);
+        let after_count = self.styles.row_heights.len();
+        if before_count != after_count {
+            fixes.push(format!(
+                "Removed {} out-of-bounds row heights",
+                before_count - after_count
+            ));
+        }
+
+        // 修复越界的 col_widths
+        let col_count = self.col_count() as u16;
+        let before_count = self.styles.col_widths.len();
+        self.styles.col_widths.retain(|col, _| *col < col_count);
+        let after_count = self.styles.col_widths.len();
+        if before_count != after_count {
+            fixes.push(format!(
+                "Removed {} out-of-bounds column widths",
+                before_count - after_count
+            ));
         }
 
         fixes
@@ -517,12 +516,12 @@ mod tests {
     #[test]
     fn test_sheet_region_with_styles() {
         let data = vec![vec![Some(Cell::Text("Test".to_string()))]];
-        let mut style_map = HashMap::new();
-        style_map.insert((0, 0), Arc::from("header_style"));
+        let mut styles = RegionStyles::new();
+        styles.cell_styles.insert((0, 0), Arc::from("header_style"));
 
-        let region = SheetRegion::new("styled", data).with_style_map(style_map);
+        let region = SheetRegion::new("styled", data).with_styles(styles);
 
-        assert!(region.styles().is_some());
+        assert_eq!(region.cell_styles().len(), 1);
         assert_eq!(region.get_style(0, 0), Some(&Arc::from("header_style")));
     }
 

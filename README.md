@@ -12,6 +12,36 @@
 - **🖥️ 跨平台字体**：自动适配 Windows（微软雅黑）和 macOS（苹方）的中文字体
 - **🧩 多区域支持**：单个工作表支持多个独立数据区域，灵活组合复杂报表
 
+## 📖 文档
+
+| 文档 | 说明 |
+|------|------|
+| [📚 完整配置指南](docs/configuration_guide.md) | 系统学习所有配置选项（1700+行详细文档，含样式库配置） |
+| [⚡ 快速参考手册](docs/QUICK_REFERENCE.md) | 常用配置模式速查（368行速查手册） |
+| [📁 示例配置](docs/examples/) | 6个完整配置示例 |
+
+**新手推荐**: 先阅读 [快速开始](docs/configuration_guide.md#1-快速开始) 章节，然后查看 [基础示例](docs/examples/basic.json)。
+
+### 核心配置概念
+
+```json
+{
+  "styles": {                    // 1️⃣ 定义样式库
+    "header": { "bg_color": "#4472C4", "bold": true }
+  },
+  "style_rules": [...],          // 2️⃣ 样式应用规则（引用 styles）
+  "merge_rules": [...],          // 3️⃣ 合并单元格规则
+  "dimension_rules": [...]       // 4️⃣ 行高列宽规则
+}
+```
+
+**使用方法**：
+```rust
+let workbook = Workbook::new()?
+    .with_library_from_json(&config["styles"])?  // 加载样式库
+    .with_dataframe(df, &config)?;               // 应用所有规则
+```
+
 ## 📚 核心概念
 
 ### 工作表区域（SheetRegion）
