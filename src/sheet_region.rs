@@ -81,22 +81,55 @@ impl SheetRegion {
         }
 
         let column_names = self.column_names();
+        let data_row_count = self.data.len() - 1; // 排除表头
         let mut series_vec: Vec<Series> = Vec::new();
 
         for (col_idx, col_name) in column_names.iter().enumerate() {
-            let mut data: Vec<AnyValue> = Vec::new();
+            // === 单次扫描：收集 Cell 引用并检测类型 ===
+            let mut cells: Vec<Option<&Cell>> = Vec::with_capacity(data_row_count);
+            let mut has_text = false;
+            let mut has_number = false;
+            let mut has_boolean = false;
 
             for row_idx in 1..self.data.len() {
                 let cell = self.data[row_idx].get(col_idx).and_then(|opt| opt.as_ref());
 
-                let any_val = match cell {
-                    Some(Cell::Text(s)) => AnyValue::StringOwned(s.clone().into()),
-                    Some(Cell::Number(n)) => AnyValue::Float64(*n),
-                    Some(Cell::Boolean(b)) => AnyValue::Boolean(*b),
-                    None => AnyValue::Null,
-                };
-                data.push(any_val);
+                // 检测类型
+                match cell {
+                    Some(Cell::Text(_)) => has_text = true,
+                    Some(Cell::Number(_)) => has_number = true,
+                    Some(Cell::Boolean(_)) => has_boolean = true,
+                    None => {}
+                }
+
+                cells.push(cell);
             }
+
+            // 判断是否混合类型：Text 与 Number/Boolean 共存
+            let is_mixed = has_text && (has_number || has_boolean);
+
+            // === 转换数据 ===
+            let data: Vec<AnyValue> = cells
+                .into_iter()
+                .map(|cell| match cell {
+                    Some(Cell::Text(s)) => AnyValue::StringOwned(s.clone().into()),
+                    Some(Cell::Number(n)) => {
+                        if is_mixed {
+                            AnyValue::StringOwned(n.to_string().into())
+                        } else {
+                            AnyValue::Float64(*n)
+                        }
+                    }
+                    Some(Cell::Boolean(b)) => {
+                        if is_mixed {
+                            AnyValue::StringOwned(b.to_string().into())
+                        } else {
+                            AnyValue::Boolean(*b)
+                        }
+                    }
+                    None => AnyValue::Null,
+                })
+                .collect();
 
             let series = Series::from_any_values(col_name.as_str().into(), &data, true)
                 .map_err(|e| XlsxError::GenericError(format!("Series error: {}", e)))?;
