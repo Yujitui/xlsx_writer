@@ -68,6 +68,12 @@ pub enum StyleCondition {
         /// 支持负数，例如 [0, 0] 代表排除第一行，[-1, -1] 代表排除最后一行。
         criteria: [i32; 2],
     },
+
+    /// 7. 选中所有行或列。
+    ///
+    /// 无条件选中所有目标，常用于设置全局默认值。
+    /// 后面的规则可以覆盖此规则设置的值。
+    All,
 }
 
 impl StyleCondition {
@@ -77,15 +83,16 @@ impl StyleCondition {
     ///
     /// # 返回值
     /// * `Some(&Vec<String>)` - 對於基於內容的判斷條件，返回其操作的目標列
-    /// * `None` - 對於行級定位條件（`Index`, `ExcludeRows`），返回 `None`
+    /// * `None` - 對於行級定位條件（`Index`, `ExcludeRows`, `All`），返回 `None`
     ///
     /// # 設計考量
     /// 通過返回引用而非所有權，避免在遍歷大量規則時產生不必要的內存分配。
     pub fn get_targets(&self) -> Option<&Vec<String>> {
         match self {
-            // Index\ExcludeRows 模式僅與物理行相關，執行引擎應據此判斷是否進行整行處理
+            // Index\ExcludeRows\All 模式僅與物理行相關，執行引擎應據此判斷是否進行整行處理
             StyleCondition::Index { .. } => None,
             StyleCondition::ExcludeRows { .. } => None,
+            StyleCondition::All => None,
 
             // 所有基於內容的條件均指向一組具體的列
             StyleCondition::ValueRange { targets, .. } => Some(targets),

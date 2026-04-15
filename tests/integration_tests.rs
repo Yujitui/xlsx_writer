@@ -809,4 +809,100 @@ mod dimension_factory_tests {
 
         assert_eq!(result.row_heights.get(&0), Some(&35.0));
     }
+
+    /// 测试 All 条件 - 为所有列启用自动列宽
+    #[test]
+    fn test_dimension_factory_all_columns_auto_width() {
+        let df = df! {
+            "name" => ["Alice", "Bob", "Charlie"],
+            "age" => [25, 30, 35],
+            "city" => ["New York", "Los Angeles", "Chicago"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "column",
+                "condition": {"type": "all"},
+                "value": {"type": "auto"}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        // 应该为所有3列都计算了宽度
+        assert_eq!(result.col_widths.len(), 3, "All columns should have widths");
+        assert!(
+            result.col_widths.contains_key(&0),
+            "Column 0 should have width"
+        );
+        assert!(
+            result.col_widths.contains_key(&1),
+            "Column 1 should have width"
+        );
+        assert!(
+            result.col_widths.contains_key(&2),
+            "Column 2 should have width"
+        );
+    }
+
+    /// 测试 All 条件 - 为所有行设置固定行高
+    #[test]
+    fn test_dimension_factory_all_rows_fixed_height() {
+        let df = df! {
+            "name" => ["Alice", "Bob", "Charlie"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "row",
+                "condition": {"type": "all"},
+                "value": {"type": "fixed", "value": 25.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        // 应该为所有3行都设置了行高
+        assert_eq!(result.row_heights.len(), 3, "All rows should have heights");
+        assert_eq!(result.row_heights.get(&0), Some(&25.0));
+        assert_eq!(result.row_heights.get(&1), Some(&25.0));
+        assert_eq!(result.row_heights.get(&2), Some(&25.0));
+    }
+
+    /// 测试 All 条件与其他条件的覆盖关系
+    #[test]
+    fn test_dimension_factory_all_with_override() {
+        let df = df! {
+            "name" => ["Alice", "Bob", "Charlie"]
+        }
+        .expect("Failed to create DataFrame");
+
+        let config = json!([
+            {
+                "target": "row",
+                "condition": {"type": "all"},
+                "value": {"type": "fixed", "value": 20.0}
+            },
+            {
+                "target": "row",
+                "condition": {"type": "index", "criteria": [1]},
+                "value": {"type": "fixed", "value": 35.0}
+            }
+        ]);
+
+        let factory = DimensionFactory::new(config).expect("Failed to create factory");
+        let result = factory.execute(&df).expect("Failed to execute");
+
+        // 所有行都应该有行高
+        assert_eq!(result.row_heights.len(), 3);
+        // 第0行和第2行使用 All 设置的值
+        assert_eq!(result.row_heights.get(&0), Some(&20.0));
+        assert_eq!(result.row_heights.get(&2), Some(&20.0));
+        // 第1行被后面的规则覆盖
+        assert_eq!(result.row_heights.get(&1), Some(&35.0));
+    }
 }

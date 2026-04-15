@@ -228,6 +228,10 @@ pub fn evaluate_row_conditions(
 
                 Ok(BooleanChunked::from_slice("mask".into(), &mask))
             }
+            StyleCondition::All => {
+                // 返回全为 true 的掩码（包括 header 行）
+                Ok(BooleanChunked::full("mask".into(), true, height + 1))
+            }
         }?;
         full_mask = full_mask & mask;
     }
@@ -258,6 +262,12 @@ pub fn evaluate_col_conditions(
 
     for cond in conditions {
         match cond {
+            StyleCondition::All => {
+                // 返回所有列的索引
+                for idx in 0..column_names.len() {
+                    matched.insert(idx as u16);
+                }
+            }
             c if c.get_targets().is_some() => {
                 if let Some(targets) = c.get_targets() {
                     for name in targets {
