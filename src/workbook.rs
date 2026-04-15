@@ -342,6 +342,7 @@ impl Workbook {
                                 Data::Float(val) => Some(Cell::Number(*val)),
                                 Data::String(val) => Some(Cell::Text(val.clone())),
                                 Data::Bool(val) => Some(Cell::Boolean(*val)),
+                                Data::Error(_) => None,
                                 Data::Empty => None,
                                 _ => {
                                     if let Some(date) = cell.as_date() {
