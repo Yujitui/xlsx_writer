@@ -54,7 +54,7 @@ pub fn evaluate_row_conditions(
                 let mut mask = vec![false; height + 1];
                 for &phys_idx in criteria {
                     let df_idx = if phys_idx < 0 {
-                        // 负数索引：-1 对应最后一行数据
+                        // 负数索引：-1 对应最后一行数据（Excel 物理行号 height）
                         // 转换为 mask 索引（包括 header）
                         let adjusted_idx = height as i32 + phys_idx + 1;
                         if adjusted_idx < 0 {
@@ -62,9 +62,8 @@ pub fn evaluate_row_conditions(
                         }
                         adjusted_idx as usize
                     } else {
-                        // 正数索引：直接对应数据行索引（0 = 第一行数据）
-                        // 加 1 跳过 header 行
-                        (phys_idx as usize) + 1
+                        // 正数索引：直接对应 Excel 物理行号（0 = header 行）
+                        phys_idx as usize
                     };
 
                     if df_idx <= height {

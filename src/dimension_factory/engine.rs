@@ -85,14 +85,11 @@ impl DimensionFactory {
         };
 
         // 应用行高到匹配的行
-        // row_mask 长度为 height + 1，其中索引 0 是 header 行，1..=height 是数据行
+        // row_mask 长度为 height + 1，索引直接对应 Excel 物理行号
         for (r_idx, matched) in row_mask.into_iter().enumerate() {
             if let Some(true) = matched {
-                // 跳过 header 行（索引 0）
-                if r_idx > 0 {
-                    // 数据行索引减 1 转换为 0-based
-                    result.row_heights.insert((r_idx - 1) as u32, height);
-                }
+                // 直接使用 mask 索引作为 Excel 物理行号
+                result.row_heights.insert(r_idx as u32, height);
             }
         }
 

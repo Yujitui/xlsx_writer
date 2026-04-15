@@ -716,8 +716,8 @@ mod dimension_factory_tests {
         let factory = DimensionFactory::new(config).expect("Failed to create factory");
         let result = factory.execute(&df).expect("Failed to execute");
 
-        // -1 应该对应最后一行（索引 2，因为是 0-based）
-        assert_eq!(result.row_heights.get(&2), Some(&40.0));
+        // -1 应该对应最后一行数据（Excel 物理行号 3）
+        assert_eq!(result.row_heights.get(&3), Some(&40.0));
     }
 
     /// 测试 Match 条件定位列
@@ -866,11 +866,12 @@ mod dimension_factory_tests {
         let factory = DimensionFactory::new(config).expect("Failed to create factory");
         let result = factory.execute(&df).expect("Failed to execute");
 
-        // 应该为所有3行都设置了行高
-        assert_eq!(result.row_heights.len(), 3, "All rows should have heights");
-        assert_eq!(result.row_heights.get(&0), Some(&25.0));
-        assert_eq!(result.row_heights.get(&1), Some(&25.0));
-        assert_eq!(result.row_heights.get(&2), Some(&25.0));
+        // 应该为所有4行都设置了行高（包括 header 行 0 和 3行数据 1,2,3）
+        assert_eq!(result.row_heights.len(), 4, "All rows should have heights");
+        assert_eq!(result.row_heights.get(&0), Some(&25.0)); // header 行
+        assert_eq!(result.row_heights.get(&1), Some(&25.0)); // 数据行 0
+        assert_eq!(result.row_heights.get(&2), Some(&25.0)); // 数据行 1
+        assert_eq!(result.row_heights.get(&3), Some(&25.0)); // 数据行 2
     }
 
     /// 测试 All 条件与其他条件的覆盖关系
@@ -897,12 +898,13 @@ mod dimension_factory_tests {
         let factory = DimensionFactory::new(config).expect("Failed to create factory");
         let result = factory.execute(&df).expect("Failed to execute");
 
-        // 所有行都应该有行高
-        assert_eq!(result.row_heights.len(), 3);
-        // 第0行和第2行使用 All 设置的值
-        assert_eq!(result.row_heights.get(&0), Some(&20.0));
-        assert_eq!(result.row_heights.get(&2), Some(&20.0));
-        // 第1行被后面的规则覆盖
-        assert_eq!(result.row_heights.get(&1), Some(&35.0));
+        // 所有行都应该有行高（4行：header 0 + 数据 1,2,3）
+        assert_eq!(result.row_heights.len(), 4);
+        // 第0行(header)和第2,3行使用 All 设置的值
+        assert_eq!(result.row_heights.get(&0), Some(&20.0)); // header 行
+        assert_eq!(result.row_heights.get(&2), Some(&20.0)); // 数据行 1
+        assert_eq!(result.row_heights.get(&3), Some(&20.0)); // 数据行 2
+                                                             // 第1行被后面的规则覆盖
+        assert_eq!(result.row_heights.get(&1), Some(&35.0)); // 数据行 0
     }
 }
