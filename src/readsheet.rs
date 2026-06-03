@@ -8,7 +8,7 @@ use std::hash::Hash;
 ///
 /// # 字段说明
 ///
-/// - `sheet_name`: 指定要读取的工作表名称
+/// - `sheet_name`: 要读取的工作表名称，`None` 表示读取第一张表
 /// - `force_string_cols`: 可选的列名列表，指定哪些列应强制作为字符串类型读取
 /// - `skip_rows`: 可选的行数，指定在读取数据前需要跳过的行数
 #[derive(Debug, Clone, Deserialize)]
@@ -16,8 +16,10 @@ use std::hash::Hash;
 pub struct ReadSheet {
     /// 工作表名称
     ///
-    /// 必需字段，指定要读取的具体工作表名称
-    pub sheet_name: String,
+    /// `None` 表示读取工作簿中的第一张表。
+    /// JSON 中可省略此字段，效果等同 `None`。
+    #[serde(default)]
+    pub sheet_name: Option<String>,
 
     /// 强制将指定列作为字符串读取
     ///
@@ -49,17 +51,16 @@ impl ReadSheet {
     /// 返回一个新的`ReadSheet`实例，所有可选配置项初始为`None`
     pub fn new(sheet_name: String) -> ReadSheet {
         ReadSheet {
-            sheet_name,
+            sheet_name: Some(sheet_name),
             ..Default::default()
         }
     }
 }
 
-// 为 ReadSheet 实现 Default trait，便于测试和默认配置
 impl Default for ReadSheet {
     fn default() -> Self {
         ReadSheet {
-            sheet_name: "Sheet1".to_string(),
+            sheet_name: None,
             force_string_cols: None,
             skip_rows: None,
         }

@@ -284,12 +284,20 @@ impl Workbook {
             // 直接使用 calamine 读取数据并转换为 cells
             let result = (|| -> Result<WorkSheet, XlsxError> {
                 let sheet_names = excel.sheet_names();
+                if sheet_names.is_empty() {
+                    return Err(XlsxError::EmptyDataFrame);
+                }
 
-                // 确定目标工作表
-                let target_sheet = if sheet_names.contains(&sheet_config.sheet_name) {
-                    &sheet_config.sheet_name
-                } else {
-                    return Err(XlsxError::SheetNotFound(sheet_config.sheet_name.clone()));
+                // 确定目标工作表：None → 第一张表，Some(name) → 按名称匹配
+                let target_sheet_name = match &sheet_config.sheet_name {
+                    Some(name) => {
+                        if sheet_names.contains(name) {
+                            name.clone()
+                        } else {
+                            return Err(XlsxError::SheetNotFound(name.clone()));
+                        }
+                    }
+                    None => sheet_names[0].clone(),
                 };
 
                 let skip_rows = sheet_config.skip_rows.unwrap_or(0);
@@ -297,7 +305,7 @@ impl Workbook {
 
                 // 获取工作表数据
                 let range = excel
-                    .worksheet_range(target_sheet)
+                    .worksheet_range(&target_sheet_name)
                     .map_err(|e| XlsxError::CalamineError(e))?;
 
                 let mut rows = range.rows().skip(skip_rows);
@@ -364,7 +372,7 @@ impl Workbook {
 
                 // 创建默认 "data" 区域
                 let region = SheetRegion::new("data", cells);
-                WorkSheet::new(sheet_config.sheet_name.clone(), vec![region])
+                WorkSheet::new(target_sheet_name.clone(), vec![region])
             })();
 
             match result {
@@ -376,7 +384,7 @@ impl Workbook {
                     }
                 }
                 Err(e) => {
-                    eprintln!("读取sheet '{}' 失败: {}", sheet_config.sheet_name, e);
+                    eprintln!("读取sheet 失败: {}", e);
                 }
             }
         }
@@ -433,12 +441,20 @@ impl Workbook {
             // 按 read_sheets 筛选
             read_sheets
                 .iter()
-                .filter_map(|rs| {
-                    sheet_names
-                        .iter()
-                        .position(|name| name == &rs.sheet_name)
-                        .map(|idx| (idx, Some(rs)))
+                .map(|rs| {
+                    let idx = match &rs.sheet_name {
+                        Some(name) => sheet_names.iter().position(|n| n == name),
+                        None => {
+                            if sheet_names.is_empty() {
+                                None
+                            } else {
+                                Some(0) // 第一张表
+                            }
+                        }
+                    };
+                    idx.map(|i| (i, Some(rs)))
                 })
+                .flatten()
                 .collect()
         };
 
