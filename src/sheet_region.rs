@@ -428,6 +428,38 @@ impl SheetRegion {
         issues
     }
 
+    /// 删除指定行（0-based），同步调整样式和合并区域
+    pub fn delete_row(&mut self, index: usize) -> Result<(), XlsxError> {
+        if index >= self.data.len() {
+            return Err(XlsxError::GenericError(format!(
+                "Row index {} out of bounds (rows: {})",
+                index,
+                self.data.len()
+            )));
+        }
+        self.data.remove(index);
+        self.styles.adjust_for_row_deletion(index as u32);
+        Ok(())
+    }
+
+    /// 删除指定列（0-based），同步调整样式和合并区域
+    pub fn delete_column(&mut self, index: usize) -> Result<(), XlsxError> {
+        let cols = self.col_count();
+        if index >= cols {
+            return Err(XlsxError::GenericError(format!(
+                "Column index {} out of bounds (cols: {})",
+                index, cols
+            )));
+        }
+        for row in self.data.iter_mut() {
+            if index < row.len() {
+                row.remove(index);
+            }
+        }
+        self.styles.adjust_for_column_deletion(index as u16);
+        Ok(())
+    }
+
     pub fn validate_and_fix(&mut self) -> Vec<String> {
         let mut fixes = Vec::new();
         let row_count = self.data.len();
@@ -605,5 +637,185 @@ mod tests {
 
         region.clear_merge_at(0, 0);
         assert!(!region.is_merged(0, 0));
+    }
+
+    // ─── 行列删除操作验收测试 ─────────────────────────────
+
+    #[test]
+    fn test_delete_row_basic() {
+        let data = vec![
+            vec![
+                Some(Cell::Text("Hdr".to_string())),
+                Some(Cell::Text("Val".to_string())),
+            ],
+            vec![Some(Cell::Number(1.0)), Some(Cell::Number(10.0))],
+            vec![Some(Cell::Number(2.0)), Some(Cell::Number(20.0))],
+            vec![Some(Cell::Number(3.0)), Some(Cell::Number(30.0))],
+        ];
+        let mut region = SheetRegion::new("test", data);
+
+        region.delete_row(1).unwrap();
+
+        assert_eq!(region.row_count(), 3);
+        assert_eq!(region.data[1][0], Some(Cell::Number(2.0)));
+        assert_eq!(region.data[1][1], Some(Cell::Number(20.0)));
+        assert_eq!(region.data[2][0], Some(Cell::Number(3.0)));
+        assert_eq!(region.data[2][1], Some(Cell::Number(30.0)));
+    }
+
+    #[test]
+    fn test_delete_column_basic() {
+        let data = vec![
+            vec![
+                Some(Cell::Text("A".to_string())),
+                Some(Cell::Text("B".to_string())),
+                Some(Cell::Text("C".to_string())),
+            ],
+            vec![
+                Some(Cell::Number(1.0)),
+                Some(Cell::Number(2.0)),
+                Some(Cell::Number(3.0)),
+            ],
+        ];
+        let mut region = SheetRegion::new("test", data);
+
+        region.delete_column(1).unwrap();
+
+        assert_eq!(region.col_count(), 2);
+        assert_eq!(region.data[0][1], Some(Cell::Text("C".to_string())));
+        assert_eq!(region.data[1][1], Some(Cell::Number(3.0)));
+    }
+
+    #[test]
+    fn test_delete_row_adjusts_styles() {
+        let data = vec![
+            vec![Some(Cell::Text("H".to_string()))],
+            vec![Some(Cell::Number(1.0))],
+            vec![Some(Cell::Number(2.0))],
+            vec![Some(Cell::Number(3.0))],
+        ];
+        let mut region = SheetRegion::new("test", data);
+        region.set_style(0, 0, "header");
+        region.set_style(1, 0, "row1");
+        region.set_style(2, 0, "row2");
+        region.set_style(3, 0, "row3");
+
+        region.delete_row(1).unwrap();
+
+        assert_eq!(region.get_style(0, 0), Some(&Arc::from("header")));
+        assert_eq!(region.get_style(1, 0), Some(&Arc::from("row2")));
+        assert_eq!(region.get_style(2, 0), Some(&Arc::from("row3")));
+        assert_eq!(region.styles.cell_styles.len(), 3);
+    }
+
+    #[test]
+    fn test_delete_column_adjusts_styles() {
+        let data = vec![vec![
+            Some(Cell::Text("A".to_string())),
+            Some(Cell::Text("B".to_string())),
+            Some(Cell::Text("C".to_string())),
+        ]];
+        let mut region = SheetRegion::new("test", data);
+        region.set_style(0, 0, "col_a");
+        region.set_style(0, 1, "col_b");
+        region.set_style(0, 2, "col_c");
+
+        region.delete_column(1).unwrap();
+
+        assert_eq!(region.get_style(0, 0), Some(&Arc::from("col_a")));
+        assert_eq!(region.get_style(0, 1), Some(&Arc::from("col_c")));
+        assert_eq!(region.styles.cell_styles.len(), 2);
+    }
+
+    #[test]
+    fn test_delete_row_with_merges() {
+        let data = vec![
+            vec![Some(Cell::Text("H".to_string())); 2],
+            vec![Some(Cell::Number(1.0)); 2],
+            vec![Some(Cell::Number(2.0)); 2],
+            vec![Some(Cell::Number(3.0)); 2],
+            vec![Some(Cell::Number(4.0)); 2],
+        ];
+        let mut region = SheetRegion::new("test", data);
+
+        region.add_merge(0, 0, 0, 1);
+        region.add_merge(1, 0, 3, 1);
+        region.add_merge(4, 0, 4, 1);
+
+        region.delete_row(1).unwrap();
+
+        assert_eq!(region.get_merge(0, 0), Some((0, 0, 0, 1)));
+        assert_eq!(region.get_merge(1, 0), Some((1, 0, 2, 1)));
+        assert_eq!(region.get_merge(3, 0), Some((3, 0, 3, 1)));
+        assert_eq!(region.styles.merge_ranges.len(), 3);
+    }
+
+    #[test]
+    fn test_delete_column_with_merges() {
+        let data = vec![
+            vec![
+                Some(Cell::Text("A".to_string())),
+                Some(Cell::Text("B".to_string())),
+                Some(Cell::Text("C".to_string())),
+                Some(Cell::Text("D".to_string())),
+            ],
+            vec![Some(Cell::Number(1.0)); 4],
+        ];
+        let mut region = SheetRegion::new("test", data);
+
+        region.add_merge(0, 0, 0, 1);
+        region.add_merge(0, 2, 1, 3);
+        region.add_merge(1, 0, 1, 0);
+
+        region.delete_column(1).unwrap();
+
+        assert_eq!(region.get_merge(0, 0), Some((0, 0, 0, 0)));
+        assert_eq!(region.get_merge(0, 1), Some((0, 1, 1, 2)));
+        assert_eq!(region.get_merge(1, 0), Some((1, 0, 1, 0)));
+        assert_eq!(region.styles.merge_ranges.len(), 3);
+    }
+
+    #[test]
+    fn test_delete_row_edge_cases() {
+        let mut region = SheetRegion::empty("empty");
+        assert!(region.delete_row(0).is_err());
+
+        let data = vec![vec![Some(Cell::Text("only".to_string()))]];
+        let mut region = SheetRegion::new("single", data);
+        region.delete_row(0).unwrap();
+        assert_eq!(region.row_count(), 0);
+        assert!(region.styles.cell_styles.is_empty());
+        assert!(region.delete_row(0).is_err());
+
+        let data = vec![
+            vec![Some(Cell::Number(1.0))],
+            vec![Some(Cell::Number(2.0))],
+        ];
+        let mut region = SheetRegion::new("rh", data);
+        region.styles.row_heights.insert(0, 30.0);
+        region.styles.row_heights.insert(1, 25.0);
+        region.delete_row(0).unwrap();
+        assert_eq!(region.styles.row_heights.get(&0), Some(&25.0));
+        assert_eq!(region.styles.row_heights.len(), 1);
+    }
+
+    #[test]
+    fn test_delete_column_edge_cases() {
+        let data = vec![
+            vec![
+                Some(Cell::Text("A".to_string())),
+                Some(Cell::Text("B".to_string())),
+            ],
+        ];
+        let mut region = SheetRegion::new("test", data);
+        region.styles.col_widths.insert(0, 10.0);
+        region.styles.col_widths.insert(1, 20.0);
+
+        region.delete_column(0).unwrap();
+        assert_eq!(region.styles.col_widths.get(&0), Some(&20.0));
+        assert_eq!(region.styles.col_widths.len(), 1);
+        assert_eq!(region.col_count(), 1);
+        assert_eq!(region.data[0][0], Some(Cell::Text("B".to_string())));
+        assert!(region.delete_column(1).is_err());
     }
 }

@@ -71,6 +71,104 @@ impl RegionStyles {
 
         // col_widths 列坐标不受影响（列与表头无关）
     }
+
+    /// 删除某行后调整所有样式坐标
+    ///
+    /// - cell_styles: 移除该行的样式，后续行号减1
+    /// - row_heights: 移除该行的行高，后续行号减1
+    /// - merge_ranges: 合并仅在该行的删除，跨该行的缩小范围，后续行号减1
+    pub fn adjust_for_row_deletion(&mut self, deleted_row: u32) {
+        self.cell_styles = self
+            .cell_styles
+            .drain()
+            .filter(|((row, _), _)| *row != deleted_row)
+            .map(|((row, col), style)| {
+                if row > deleted_row {
+                    ((row - 1, col), style)
+                } else {
+                    ((row, col), style)
+                }
+            })
+            .collect();
+
+        self.row_heights = self
+            .row_heights
+            .drain()
+            .filter(|(row, _)| *row != deleted_row)
+            .map(|(row, height)| {
+                if row > deleted_row {
+                    (row - 1, height)
+                } else {
+                    (row, height)
+                }
+            })
+            .collect();
+
+        self.merge_ranges = self
+            .merge_ranges
+            .drain(..)
+            .filter_map(|(sr, sc, er, ec)| {
+                if er < deleted_row {
+                    Some((sr, sc, er, ec))
+                } else if sr > deleted_row {
+                    Some((sr - 1, sc, er - 1, ec))
+                } else if sr == deleted_row && er == deleted_row {
+                    None
+                } else {
+                    Some((sr, sc, er - 1, ec))
+                }
+            })
+            .collect();
+    }
+
+    /// 删除某列后调整所有样式坐标
+    ///
+    /// - cell_styles: 移除该列的样式，后续列号减1
+    /// - col_widths: 移除该列的列宽，后续列号减1
+    /// - merge_ranges: 合并仅在该列的删除，跨该列的缩小范围，后续列号减1
+    pub fn adjust_for_column_deletion(&mut self, deleted_col: u16) {
+        self.cell_styles = self
+            .cell_styles
+            .drain()
+            .filter(|((_, col), _)| *col != deleted_col)
+            .map(|((row, col), style)| {
+                if col > deleted_col {
+                    ((row, col - 1), style)
+                } else {
+                    ((row, col), style)
+                }
+            })
+            .collect();
+
+        self.col_widths = self
+            .col_widths
+            .drain()
+            .filter(|(col, _)| *col != deleted_col)
+            .map(|(col, width)| {
+                if col > deleted_col {
+                    (col - 1, width)
+                } else {
+                    (col, width)
+                }
+            })
+            .collect();
+
+        self.merge_ranges = self
+            .merge_ranges
+            .drain(..)
+            .filter_map(|(sr, sc, er, ec)| {
+                if ec < deleted_col {
+                    Some((sr, sc, er, ec))
+                } else if sc > deleted_col {
+                    Some((sr, sc - 1, er, ec - 1))
+                } else if sc == deleted_col && ec == deleted_col {
+                    None
+                } else {
+                    Some((sr, sc, er, ec - 1))
+                }
+            })
+            .collect();
+    }
 }
 
 #[cfg(test)]
