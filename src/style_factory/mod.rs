@@ -194,7 +194,17 @@ pub fn evaluate_row_conditions(
                         merge_mask(&mut mask, col_mask);
                     }
                 }
-                Ok::<BooleanChunked, StyleFactoryError>(if *criteria { mask } else { !mask })
+
+                // 修复：基于内容的条件永远不应该命中表头行（第 0 行）。
+                // 当 criteria 为 false 时，!mask 会把原本用于排除表头的 false 翻转为 true，
+                // 因此需要用表头排除掩码再与一次，确保第 0 行始终为 false。
+                let mut header_exclude = vec![false];
+                header_exclude.resize(height + 1, true);
+                let header_exclude = BooleanChunked::from_slice("mask".into(), &header_exclude);
+
+                Ok::<BooleanChunked, StyleFactoryError>(
+                    (if *criteria { mask } else { !mask }) & header_exclude,
+                )
             }
             StyleCondition::ExcludeRows { criteria, .. } => {
                 let mut mask = vec![true; height + 1];
