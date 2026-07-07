@@ -1004,7 +1004,7 @@ impl Workbook {
 
         // 写入 CFB 文件
         let file = File::create(path)?;
-        let mut compound_file = CompoundFile::create(file)?;
+        let mut compound_file = CompoundFile::create_with_version(cfb::Version::V3, file)?;
         let mut stream = compound_file.create_stream("Workbook")?;
         stream.write_all(&workbook_stream)?;
         stream.flush()?;
