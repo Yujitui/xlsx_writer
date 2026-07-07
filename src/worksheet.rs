@@ -366,10 +366,11 @@ impl WorkSheet {
         // 计算累积偏移（单位：字节）
         // =====================================================================
         // 以下是 sheet 内各记录的相对位置：
-        // [BOF]  [CalcMode]  [CalcCount]  [RefMode]  [Delta]  [Iteration]
+        // [BOF]
+        // [INDEX] ← index_data_offset (INDEX 的 data 段)
+        // [CalcMode]  [CalcCount]  [RefMode]  [Delta]  [Iteration]
         // [Guts]  [DefaultRowHeight]  [WSBool]
         // [DefColWidth] ← defcolwidth_pos
-        // [INDEX] ← index_data_offset (INDEX 的 data 段)
         // [DIMENSIONS]
         // [Print/Protection records]
         // [RowBlock1: ROW + CELL records ...]
@@ -382,8 +383,14 @@ impl WorkSheet {
 
         let mut pos: u32 = 0;
 
-        // BOF + 8 个设置记录
+        // BOF
         pos += bof.len() as u32;
+
+        // INDEX 紧接着 BOF（4 字节头部之后）
+        let index_data_offset = pos + 4; // skip INDEX header (id + len)
+        pos += index_bytes.len() as u32;
+
+        // 设置记录
         pos += calc_mode.len() as u32;
         pos += calc_count.len() as u32;
         pos += ref_mode.len() as u32;
@@ -396,10 +403,6 @@ impl WorkSheet {
         // DefColWidth
         let defcolwidth_pos = pos;
         pos += defcolwidth.len() as u32;
-
-        // INDEX 的 data 段起始位置（4 字节头部之后）
-        let index_data_offset = pos + 4; // skip INDEX header (id + len)
-        pos += index_bytes.len() as u32;
 
         // Dimensions + 打印记录 + 保护记录
         pos += dims.len() as u32;
@@ -475,6 +478,11 @@ impl WorkSheet {
         let mut result = Vec::with_capacity(pos as usize);
 
         result.extend_from_slice(&bof);
+
+        // INDEX 紧接着 BOF (with relative offsets; workbook will patch absolute FilePointers)
+        let index = IndexRecord::new(rw_mic, rw_mac, ib_xf, rgib_rw);
+        result.extend_from_slice(&index.serialize());
+
         result.extend_from_slice(&calc_mode);
         result.extend_from_slice(&calc_count);
         result.extend_from_slice(&ref_mode);
@@ -486,10 +494,6 @@ impl WorkSheet {
 
         // DefColWidth
         result.extend_from_slice(&defcolwidth);
-
-        // INDEX (with relative offsets; workbook will patch absolute FilePointers)
-        let index = IndexRecord::new(rw_mic, rw_mac, ib_xf, rgib_rw);
-        result.extend_from_slice(&index.serialize());
 
         // Dimensions
         result.extend_from_slice(&dims);

@@ -576,6 +576,169 @@ fn test_complex_multi_sheet() {
     cleanup_old_files("test_complex_multi_sheet");
 }
 
+/// 从 .xls 文件的 Workbook 流中读取所有 BIFF 记录
+fn read_biff_records(path: &str) -> Vec<(u16, u16, Vec<u8>)> {
+    use cfb::CompoundFile;
+    use std::fs::File;
+    use std::io::{BufReader, Cursor, Read};
+
+    let file = File::open(path).expect("Failed to open file");
+    let mut buf_reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    buf_reader.read_to_end(&mut buffer).expect("Failed to read");
+
+    let mut cursor = Cursor::new(buffer);
+    let mut cfb = CompoundFile::open(&mut cursor).expect("Failed to open CFB");
+    let stream = cfb.open_stream("Workbook").expect("Workbook stream not found");
+    let bytes: Vec<u8> = stream.bytes().collect::<Result<Vec<_>, _>>().expect("Failed to read stream");
+
+    let mut records = Vec::new();
+    let mut offset = 0;
+    while offset + 4 <= bytes.len() {
+        let id = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+        let len = u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]);
+        let data_end = offset + 4 + len as usize;
+        if data_end > bytes.len() {
+            break;
+        }
+        let data = bytes[offset + 4..data_end].to_vec();
+        records.push((id, len, data));
+        offset = data_end;
+    }
+    records
+}
+
+/// 格式化一组记录的摘要（id + data 头几个字节）
+fn format_record_summary(records: &[(u16, u16, Vec<u8>)]) -> String {
+    let mut s = String::new();
+    for (i, (id, len, data)) in records.iter().enumerate() {
+        let type_name = xlsx_writer::RecordType::from_u16(*id).to_string();
+        let preview: String = data.iter().take(8).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+        s.push_str(&format!("  [{:3}] 0x{:04X} {:<30} len={:<5} data=[{}]\n", i, id, type_name, len, preview));
+    }
+    s
+}
+
+/// 测试：生成一个带少量数据的 .xls 文件并与参考文件（Excel 全新创建）对比
+#[test]
+fn test_xls_compare_with_reference() {
+    // 1. 生成最小 .xls 文件
+    let cells = vec![
+        vec![
+            Some(Cell::Text("Name".to_string())),
+            Some(Cell::Text("Age".to_string())),
+        ],
+        vec![
+            Some(Cell::Text("Alice".to_string())),
+            Some(Cell::Number(30.0)),
+        ],
+    ];
+    let region = SheetRegion::new("data", cells);
+    let sheet = WorkSheet::new("Sheet1", vec![region]).expect("Failed to create worksheet");
+    let generated_path = format!("{}/test_generated.xls", DATA_DIR);
+    Workbook::new()
+        .expect("Failed to create workbook")
+        .add_sheet(sheet)
+        .save(&generated_path)
+        .expect("Failed to save xls");
+
+    // 2. 读取参考文件和生成文件
+    let reference_path = "/Users/yujitui/Downloads/工作簿1.xls";
+    let ref_records = read_biff_records(reference_path);
+    let gen_records = read_biff_records(&generated_path);
+
+    // 3. 打印详细对比
+    println!("========== 参考文件: {} ==========", reference_path);
+    println!("共 {} 条记录", ref_records.len());
+    println!("{}", format_record_summary(&ref_records));
+
+    println!();
+    println!("========== 生成文件: {} ==========", generated_path);
+    println!("共 {} 条记录", gen_records.len());
+    println!("{}", format_record_summary(&gen_records));
+
+    // 4. 逐条对比关键记录
+    println!();
+    println!("========== 差异分析 ==========");
+
+    let ref_map: std::collections::HashMap<u16, Vec<&(u16, u16, Vec<u8>)>> = {
+        let mut m: std::collections::HashMap<u16, Vec<&(u16, u16, Vec<u8>)>> = std::collections::HashMap::new();
+        for r in &ref_records {
+            m.entry(r.0).or_default().push(r);
+        }
+        m
+    };
+    let gen_map: std::collections::HashMap<u16, Vec<&(u16, u16, Vec<u8>)>> = {
+        let mut m: std::collections::HashMap<u16, Vec<&(u16, u16, Vec<u8>)>> = std::collections::HashMap::new();
+        for r in &gen_records {
+            m.entry(r.0).or_default().push(r);
+        }
+        m
+    };
+
+    // 对比 BOF: 检查 data 长度
+    if let (Some(ref_rec), Some(gen_rec)) = (ref_map.get(&0x0809).and_then(|v| v.first()), gen_map.get(&0x0809).and_then(|v| v.first())) {
+        println!("BOF 记录:");
+        println!("  参考文件 data 长度: {} 字节, data: {:02x?}", ref_rec.1, ref_rec.2);
+        println!("  生成文件 data 长度: {} 字节, data: {:02x?}", gen_rec.1, gen_rec.2);
+    }
+
+    // 对比 WSBOOL
+    if let (Some(ref_rec), Some(gen_rec)) = (ref_map.get(&0x0081).and_then(|v| v.first()), gen_map.get(&0x0081).and_then(|v| v.first())) {
+        let ref_val = u16::from_le_bytes([ref_rec.2[0], ref_rec.2[1]]);
+        let gen_val = u16::from_le_bytes([gen_rec.2[0], gen_rec.2[1]]);
+        println!("WSBOOL: ref=0x{:04X} gen=0x{:04X}", ref_val, gen_val);
+    }
+
+    // 对比 WINDOW2
+    if let (Some(ref_rec), Some(gen_rec)) = (ref_map.get(&0x023E).and_then(|v| v.first()), gen_map.get(&0x023E).and_then(|v| v.first())) {
+        let ref_val = u16::from_le_bytes([ref_rec.2[0], ref_rec.2[1]]);
+        let gen_val = u16::from_le_bytes([gen_rec.2[0], gen_rec.2[1]]);
+        println!("WINDOW2: ref=0x{:04X} gen=0x{:04X}", ref_val, gen_val);
+    }
+
+    // 对比 DEFCOLWIDTH
+    if let (Some(ref_rec), Some(gen_rec)) = (ref_map.get(&0x0055).and_then(|v| v.first()), gen_map.get(&0x0055).and_then(|v| v.first())) {
+        let ref_val = u16::from_le_bytes([ref_rec.2[0], ref_rec.2[1]]);
+        let gen_val = u16::from_le_bytes([gen_rec.2[0], gen_rec.2[1]]);
+        println!("DEFCOLWIDTH: ref={} gen={}", ref_val, gen_val);
+    }
+
+    // 对比 DEFAULTROWHEIGHT
+    if let (Some(ref_rec), Some(gen_rec)) = (ref_map.get(&0x0225).and_then(|v| v.first()), gen_map.get(&0x0225).and_then(|v| v.first())) {
+        let ref_val = u16::from_le_bytes([ref_rec.2[2], ref_rec.2[3]]);
+        let gen_val = u16::from_le_bytes([gen_rec.2[2], gen_rec.2[3]]);
+        println!("DEFAULTROWHEIGHT: ref=0x{:04X} gen=0x{:04X}", ref_val, gen_val);
+    }
+
+    // 对比记录顺序：输出每个文件的前 20 条记录类型序列
+    println!();
+    println!("参考文件记录顺序（前 30 条）:");
+    for (i, (id, _, _)) in ref_records.iter().take(30).enumerate() {
+        println!("  [{}] 0x{:04X} {}", i, id, xlsx_writer::RecordType::from_u16(*id).to_string());
+    }
+
+    println!();
+    println!("生成文件记录顺序（前 30 条）:");
+    for (i, (id, _, _)) in gen_records.iter().take(30).enumerate() {
+        println!("  [{}] 0x{:04X} {}", i, id, xlsx_writer::RecordType::from_u16(*id).to_string());
+    }
+
+    // 断言：关键的修复项与参考文件一致
+    if let (Some(ref_rec), Some(gen_rec)) = (ref_map.get(&0x0081).and_then(|v| v.first()), gen_map.get(&0x0081).and_then(|v| v.first())) {
+        assert_eq!(ref_rec.2, gen_rec.2, "WSBOOL 数据不匹配");
+    }
+    if let (Some(ref_rec), Some(gen_rec)) = (ref_map.get(&0x023E).and_then(|v| v.first()), gen_map.get(&0x023E).and_then(|v| v.first())) {
+        // 比较 options 字段（前2字节）和 normal_magn 字段（最后2字节）
+        let ref_opts = u16::from_le_bytes([ref_rec.2[0], ref_rec.2[1]]);
+        let gen_opts = u16::from_le_bytes([gen_rec.2[0], gen_rec.2[1]]);
+        assert_eq!(ref_opts, gen_opts, "WINDOW2 options 不匹配");
+        let ref_magn = u16::from_le_bytes([ref_rec.2[16], ref_rec.2[17]]);
+        let gen_magn = u16::from_le_bytes([gen_rec.2[16], gen_rec.2[17]]);
+        assert_eq!(ref_magn, gen_magn, "WINDOW2 normal_magn 不匹配");
+    }
+}
+
 #[cfg(test)]
 mod dimension_factory_tests {
     use super::*;

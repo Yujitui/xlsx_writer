@@ -12,7 +12,7 @@ use crate::xls_records::BiffRecord;
 /// - `options`: 选项标志
 ///   - bit 0: 是否使用自定义行高（0=使用Excel默认, 1=使用自定义）
 /// - `def_height`: 默认行高（单位：1/20点）
-///   - 默认值 0x00FF = 12.75 点
+///   - 默认值 0x0140 = 16 点
 #[derive(Debug)]
 pub struct DefaultRowHeightRecord {
     options: u16,
@@ -32,7 +32,7 @@ impl Default for DefaultRowHeightRecord {
     fn default() -> Self {
         DefaultRowHeightRecord {
             options: 0x0000,
-            def_height: 0x00FF,
+            def_height: 0x0140,
         }
     }
 }
@@ -64,7 +64,7 @@ mod tests {
     fn test_default_row_height_record_default() {
         let record = DefaultRowHeightRecord::default();
         assert_eq!(record.options, 0x0000);
-        assert_eq!(record.def_height, 0x00FF);
+        assert_eq!(record.def_height, 0x0140);
     }
 
     #[test]

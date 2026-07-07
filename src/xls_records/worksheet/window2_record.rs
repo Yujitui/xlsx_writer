@@ -54,12 +54,12 @@ impl Window2Record {
 impl Default for Window2Record {
     fn default() -> Self {
         Window2Record {
-            options: 0x02B6,
+            options: 0x06B6,
             first_visible_row: 0,
             first_visible_col: 0,
             grid_colour: 64,
             preview_magn: 0,
-            normal_magn: 0,
+            normal_magn: 0x000F,
         }
     }
 }
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_window2_record_default_options() {
         let record = Window2Record::default();
-        assert_eq!(record.options, 0x02B6);
+        assert_eq!(record.options, 0x06B6);
     }
 
     #[test]
@@ -112,6 +112,6 @@ mod tests {
         assert_eq!(record.first_visible_col, 0);
         assert_eq!(record.grid_colour, 64);
         assert_eq!(record.preview_magn, 0);
-        assert_eq!(record.normal_magn, 0);
+        assert_eq!(record.normal_magn, 0x000F);
     }
 }

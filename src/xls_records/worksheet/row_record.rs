@@ -37,7 +37,7 @@ impl RowRecord {
             .map(|p| p + 1)
             .unwrap_or(0) as u16;
 
-        let height_options = 0x00FF;
+        let height_options = 0x0140;
         let options = 0x000F0100;
 
         RowRecord {

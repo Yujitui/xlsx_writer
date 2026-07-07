@@ -14,8 +14,7 @@ use crate::xls_records::BiffRecord;
 ///   - bit 1 (0x0002): 显示对话框
 ///   - bit 2 (0x0004): 冻结窗格
 ///   - bit 10 (0x0400): 显示零值
-///   - bit 12 (0x1000): 自动打印标题
-/// - 默认值为 0x0C01
+/// - 默认值为 0x04C1
 #[derive(Debug)]
 pub struct WSBoolRecord {
     options: u16,
@@ -29,7 +28,7 @@ impl WSBoolRecord {
 
 impl Default for WSBoolRecord {
     fn default() -> Self {
-        WSBoolRecord { options: 0x0C01 }
+        WSBoolRecord { options: 0x04C1 }
     }
 }
 
@@ -58,7 +57,7 @@ mod tests {
     #[test]
     fn test_wsbool_record_default() {
         let record = WSBoolRecord::default();
-        assert_eq!(record.options, 0x0C01);
+        assert_eq!(record.options, 0x04C1);
     }
 
     #[test]

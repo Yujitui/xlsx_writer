@@ -7,7 +7,7 @@ pub struct DefColWidthRecord {
 
 impl Default for DefColWidthRecord {
     fn default() -> Self {
-        DefColWidthRecord { width: 8 }
+        DefColWidthRecord { width: 10 }
     }
 }
 
