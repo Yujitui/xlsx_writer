@@ -12,7 +12,7 @@ use crate::region_styles::RegionStyles;
 use crate::sheet_region::SheetRegion;
 use crate::style_factory::StyleFactory;
 use crate::style_library::StyleLibrary;
-use crate::worksheet::WorkSheet;
+use crate::worksheet::{SheetBiffMeta, WorkSheet};
 use calamine::{open_workbook, DataType, Reader, Xlsx};
 use polars::prelude::*;
 use rust_xlsxwriter::*;
@@ -1021,15 +1021,15 @@ impl Workbook {
         // 第一步：创建共享字符串表
         let mut sst = SharedStringTable::new();
 
-        // 第二步：生成每个工作表的 BIFF 数据
-        let sheet_biff_data: Vec<Vec<u8>> = self
+        // 第二步：生成每个工作表的 BIFF 数据（含 INDEX/DBCELL 元数据）
+        let mut sheet_results: Vec<(Vec<u8>, SheetBiffMeta)> = self
             .sheets
             .iter()
             .map(|sheet| sheet.to_biff_data(&mut sst))
             .collect();
 
         // 如果没有成功生成任何工作表数据，返回错误
-        if sheet_biff_data.is_empty() {
+        if sheet_results.is_empty() {
             return Err("没有可写入的工作表".into());
         }
 
@@ -1051,37 +1051,63 @@ impl Workbook {
             .map(|r| r.serialize().len())
             .sum();
 
-        // 第五步：计算 BOUNDSHEET 偏移
+        // 第五步：计算 BOUNDSHEET 偏移和 INDEX 引用偏移
         let sst_data = SSTRecord::from(&sst).serialize();
         let eof_data = EofRecord::default().serialize();
         let after_boundsheets_len = sst_data.len() + eof_data.len();
 
-        // 每个 sheet 的偏移 = header_len + boundsheets_total_len + after_boundsheets_len + 前面所有 sheet 数据长度之和
+        // 计算每个 sheet 在工作簿数据流中的起始偏移
+        // 偏移 = header_len + boundsheets + sst + eof + 前面所有 sheet 数据的长度
+        let sheet_count = sheet_results.len();
+        let mut sheet_base_offsets: Vec<u32> = vec![0; sheet_count];
+
         let mut current_offset =
             (header_len + boundsheets_total_len + after_boundsheets_len) as u32;
-        for sheet_data in &sheet_biff_data {
-            current_offset += sheet_data.len() as u32;
+
+        // 先计算总偏移，再从后往前设置
+        for (data, _) in &sheet_results {
+            current_offset += data.len() as u32;
         }
 
-        // 从后往前设置偏移（因为 current_offset 现在是末尾位置）
-        for (i, sheet_data) in sheet_biff_data.iter().enumerate().rev() {
-            current_offset -= sheet_data.len() as u32;
+        for (i, (data, _)) in sheet_results.iter().enumerate().rev() {
+            current_offset -= data.len() as u32;
             pending_boundsheets[i].set_offset(current_offset);
+            sheet_base_offsets[i] = current_offset;
         }
 
-        // 第六步：写入带正确偏移的 BOUNDSHEET 记录
+        // 第六步：修补每个 sheet 的 INDEX 记录中的绝对 FilePointer 值
+        for (i, (ref mut sheet_data, meta)) in sheet_results.iter_mut().enumerate() {
+            let base = sheet_base_offsets[i];
+
+            // 修补 ibXF: DefColWidth 的绝对位置
+            let ibxf_data_pos = (meta.index_data_offset + 12) as usize;
+            let abs_ibxf = base + meta.defcolwidth_pos;
+            let ibxf_bytes = abs_ibxf.to_le_bytes();
+            sheet_data[ibxf_data_pos..ibxf_data_pos + 4].copy_from_slice(&ibxf_bytes);
+
+            // 修补 rgibRw: 每个 DBCELL 的绝对位置
+            for (j, dbcell_rel_pos) in meta.dbcell_offsets.iter().enumerate() {
+                let rgibrw_data_pos = (meta.index_data_offset + 16 + j as u32 * 4) as usize;
+                let abs_dbcell = base + dbcell_rel_pos;
+                let dbcell_bytes = abs_dbcell.to_le_bytes();
+                sheet_data[rgibrw_data_pos..rgibrw_data_pos + 4]
+                    .copy_from_slice(&dbcell_bytes);
+            }
+        }
+
+        // 第七步：写入带正确偏移的 BOUNDSHEET 记录
         for boundsheet in &pending_boundsheets {
             result.extend_from_slice(&boundsheet.serialize());
         }
 
-        // 第七步：写入 SST
+        // 第八步：写入 SST
         result.extend_from_slice(&sst_data);
 
-        // 第八步：写入 EOF（Workbook Globals 子流结束）
+        // 第九步：写入 EOF（Workbook Globals 子流结束）
         result.extend_from_slice(&eof_data);
 
-        // 第九步：写入工作表数据
-        for sheet_data in sheet_biff_data {
+        // 第十步：写入工作表数据（已修补的）
+        for (sheet_data, _) in sheet_results {
             result.extend_from_slice(&sheet_data);
         }
 

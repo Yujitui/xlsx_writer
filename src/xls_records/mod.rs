@@ -65,6 +65,9 @@ pub use workbook::{
 pub use worksheet::{
     // 其他记录
     bottom_margin_record::BottomMarginRecord,
+    dbcell_record::DBCellRecord,
+    def_col_width_record::DefColWidthRecord,
+    index_record::IndexRecord,
     calc_count_record::CalcCountRecord,
     calc_mode_record::CalcModeRecord,
     cell_records::{

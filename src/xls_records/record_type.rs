@@ -72,6 +72,8 @@ pub enum RecordType {
     TOOLBARHDR = 0x0161,     // Toolbar header
     TOOLBAREND = 0x0162,     // Toolbar end
     BUTTONPROPERTY = 0x013D, // Button property
+    INDEX = 0x020B,          // Index record with DBCell locations
+    DBCELL = 0x00D7,         // DBCell record for row block optimization
     MERGECELLS = 0x00E5,     // Merged cells
     UNCALCED = 0x005E,       // Uncalculated formula flag
 
@@ -131,6 +133,8 @@ impl RecordType {
             0x0161 => RecordType::TOOLBARHDR,
             0x0162 => RecordType::TOOLBAREND,
             0x013D => RecordType::BUTTONPROPERTY,
+            0x020B => RecordType::INDEX,
+            0x00D7 => RecordType::DBCELL,
             0x00E5 => RecordType::MERGECELLS,
             0x005E => RecordType::UNCALCED,
             _ => RecordType::Unknown,
@@ -193,6 +197,8 @@ impl RecordType {
             RecordType::TOOLBARHDR => "TOOLBARHDR (Toolbar header)".to_string(),
             RecordType::TOOLBAREND => "TOOLBAREND (Toolbar end)".to_string(),
             RecordType::BUTTONPROPERTY => "BUTTONPROPERTY (Button property)".to_string(),
+            RecordType::INDEX => "INDEX (Index record with DBCell locations)".to_string(),
+            RecordType::DBCELL => "DBCELL (DBCell record for row block)".to_string(),
             RecordType::MERGECELLS => "MERGECELLS (Merged cells)".to_string(),
             RecordType::UNCALCED => "UNCALCED (Uncalculated formula flag)".to_string(),
             RecordType::Unknown => "Unknown".to_string(),
