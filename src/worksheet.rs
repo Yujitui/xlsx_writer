@@ -11,11 +11,10 @@ use crate::sheet_region::SheetRegion;
 use crate::xls_records::{
     row_data_to_cell_records, BiffRecord, BoFRecord, BofType, BottomMarginRecord, CalcCountRecord,
     CalcModeRecord, DBCellRecord, DefaultRowHeightRecord, DefColWidthRecord, DeltaRecord,
-    DimensionsRecord, EofRecord, FooterRecord, GridSetRecord, GutsRecord, HCenterRecord,
-    HeaderRecord, IndexRecord, IterationRecord, LeftMarginRecord, PrintGridLinesRecord,
-    PrintHeadersRecord, RefModeRecord, RightMarginRecord, RowRecord, ScenProtectRecord,
+    DimensionsRecord, EofRecord, GridSetRecord, GutsRecord, HCenterRecord,
+    IndexRecord, IterationRecord, LeftMarginRecord, PrintGridLinesRecord,
+    PrintHeadersRecord, RefModeRecord, RightMarginRecord, RowRecord,
     SetupPageRecord, SharedStringTable, TopMarginRecord, VCenterRecord, WSBoolRecord, Window2Record,
-    WorksheetObjectProtectRecord, WorksheetProtectRecord, WorksheetWindowProtectRecord,
 };
 use polars::prelude::DataFrame;
 use std::collections::{HashSet};
@@ -222,6 +221,8 @@ impl WorkSheet {
     /// # 返回值
     /// (BIFF8 格式的字节流, INDEX/DBCELL 元数据)
     pub fn to_biff_data(&self, sst: &mut SharedStringTable) -> (Vec<u8>, SheetBiffMeta) {
+        use crate::xls_records::workbook::excel_defaults::HexBiffRecord;
+
         // =====================================================================
         // Phase 1: 收集所有非空行
         // =====================================================================
@@ -272,12 +273,12 @@ impl WorkSheet {
         // Phase 3: 预序列化每个块的行数据，记录大小
         // =====================================================================
         struct BlockPreData {
-            rows_data: Vec<(Vec<u8>, Vec<u8>)>, // (RowRecord bytes, CellRecord bytes)
-            row_sizes: Vec<u32>,                 // total size of ROW + CELL for each row
-            total_rows_size: u32,                // sum of all row_sizes
-            num_non_empty_rows: u32,             // rows with cell data in this block
-            first_cell_offsets: Vec<u16>,        // rgdb entries
-            db_rtrw: u32,                        // offset from DBCELL to first ROW
+            rows_data: Vec<(Vec<u8>, Vec<u8>)>,
+            row_sizes: Vec<u32>,
+            total_rows_size: u32,
+            num_non_empty_rows: u32,
+            first_cell_offsets: Vec<u16>,
+            db_rtrw: u32,
         }
 
         let mut block_data: Vec<BlockPreData> = Vec::new();
@@ -311,21 +312,61 @@ impl WorkSheet {
         // =====================================================================
         // Phase 4: 计算所有记录的精确位置
         // =====================================================================
-
-        // 固定大小记录：BOF + 6 个设置记录 + Guts + DefaultRowHeight + WSBool
-        // + DefColWidth + INDEX + Dimensions + 4 个打印记录 + 7 个边距记录
-        // + SetupPage + 4 个保护记录 + Window2 + EOF
-        // 这些大部分使用默认值，我们实际计算以确保准确
+        // 记录顺序（Excel 2026 参考文件结构）：
+        // [0] BOF
+        // [1] INDEX ← index_data_offset
+        // 设置记录：
+        // [2] CalcMode (0x000D)
+        // [3] CalcCount (0x000C)
+        // [4] RefMode (0x000F)
+        // [5] Iteration (0x0011)
+        // [6] Delta (0x0010)
+        // [7] SaveRecalc (0x005F) ← 新增
+        // [8] PrintHeaders (0x002A)
+        // [9] PrintGridLines (0x002B)
+        // [10] GridSet (0x0082)
+        // [11] Guts (0x0080)
+        // [12] DefaultRowHeight (0x0225)
+        // [13] WSBool (0x0081)
+        // [14] HCenter (0x0083)
+        // [15] VCenter (0x0084)
+        // [16] LeftMargin (0x0026)
+        // [17] RightMargin (0x0027)
+        // [18] TopMargin (0x0028)
+        // [19] BottomMargin (0x0029)
+        // [20] SetupPage (0x00A1)
+        // [21] Ext 0x089C (BIFF8 extension) ← 新增
+        // [22] DefColWidth (0x0055) ← defcolwidth_pos (ibXF)
+        // [23] Dimensions (0x0200)
+        // [24+] RowBlocks (ROW + CELL per row + DBCELL per block)
+        // [Window2 (0x023E)]
+        // [Ext 0x088B (16B)]
+        // [Ext 0x001D (15B)]
+        // [Ext 0x00EF (6B)]
+        // [Ext 0x0867 (23B)]
+        // [EOF]
 
         let bof = BoFRecord::new(BofType::Worksheet).serialize();
         let calc_mode = CalcModeRecord::default().serialize();
         let calc_count = CalcCountRecord::default().serialize();
         let ref_mode = RefModeRecord::default().serialize();
-        let delta = DeltaRecord::default().serialize();
         let iteration = IterationRecord::default().serialize();
+        let delta = DeltaRecord::default().serialize();
+        let save_recalc = HexBiffRecord::new(0x005F, "0100").serialize();
+        let print_headers = PrintHeadersRecord::default().serialize();
+        let print_grid = PrintGridLinesRecord::default().serialize();
+        let grid_set = GridSetRecord::default().serialize();
         let guts = GutsRecord::default().serialize();
         let def_row_height = DefaultRowHeightRecord::default().serialize();
         let wsbool = WSBoolRecord::default().serialize();
+        let hcenter = HCenterRecord::default().serialize();
+        let vcenter = VCenterRecord::default().serialize();
+        let left_margin = LeftMarginRecord::default().serialize();
+        let right_margin = RightMarginRecord::default().serialize();
+        let top_margin = TopMarginRecord::default().serialize();
+        let bottom_margin = BottomMarginRecord::default().serialize();
+        let setup_page = SetupPageRecord::default().serialize();
+        let ext_089c = HexBiffRecord::new(0x089C, "9c0800000000000000000000000000000000000000000000000000003c330000000000000000").serialize();
         let defcolwidth = DefColWidthRecord::default().serialize();
 
         let total_rows = self.total_row_count();
@@ -337,80 +378,38 @@ impl WorkSheet {
         };
         let dims = dimensions.serialize();
 
-        let print_headers = PrintHeadersRecord::default().serialize();
-        let print_grid = PrintGridLinesRecord::default().serialize();
-        let grid_set = GridSetRecord::default().serialize();
-        let header = HeaderRecord::default().serialize();
-        let footer = FooterRecord::default().serialize();
-        let hcenter = HCenterRecord::default().serialize();
-        let vcenter = VCenterRecord::default().serialize();
-        let left_margin = LeftMarginRecord::default().serialize();
-        let right_margin = RightMarginRecord::default().serialize();
-        let top_margin = TopMarginRecord::default().serialize();
-        let bottom_margin = BottomMarginRecord::default().serialize();
-        let setup_page = SetupPageRecord::default().serialize();
-        let ws_protect = WorksheetProtectRecord::default().serialize();
-        let ws_window_protect = WorksheetWindowProtectRecord::default().serialize();
-        let scen_protect = ScenProtectRecord::default().serialize();
-        let obj_protect = WorksheetObjectProtectRecord::default().serialize();
-
         let window2 = Window2Record::default().serialize();
+        let ext_088b = HexBiffRecord::new(0x088B, "8b080000000000000000000000000a00").serialize();
+        let ext_001d = HexBiffRecord::new(0x001D, "030800070000000100080008000707").serialize();
+        let ext_00ef = HexBiffRecord::new(0x00EF, "160037000000").serialize();
+        let ext_0867 = HexBiffRecord::new(0x0867, "670800000000000000000000020001ffffffff03440000").serialize();
         let eof = EofRecord::default().serialize();
 
-        // 计算 INDEX 记录大小：reserved(4) + rwMic(4) + rwMac(4) + ibXF(4) + N*4
         let num_blocks = blocks.len() as u32;
         let index_record = IndexRecord::new(0, 0, 0, vec![0u32; num_blocks as usize]);
         let index_bytes = index_record.serialize();
 
         // =====================================================================
-        // 计算累积偏移（单位：字节）
+        // 计算累积偏移
         // =====================================================================
-        // 以下是 sheet 内各记录的相对位置：
-        // [BOF]
-        // [INDEX] ← index_data_offset (INDEX 的 data 段)
-        // [CalcMode]  [CalcCount]  [RefMode]  [Delta]  [Iteration]
-        // [Guts]  [DefaultRowHeight]  [WSBool]
-        // [DefColWidth] ← defcolwidth_pos
-        // [DIMENSIONS]
-        // [Print/Protection records]
-        // [RowBlock1: ROW + CELL records ...]
-        // [DBCELL1]
-        // [RowBlock2: ROW + CELL records ...]
-        // [DBCELL2]
-        // ...
-        // [Window2]
-        // [EOF]
-
         let mut pos: u32 = 0;
 
-        // BOF
         pos += bof.len() as u32;
-
-        // INDEX 紧接着 BOF（4 字节头部之后）
-        let index_data_offset = pos + 4; // skip INDEX header (id + len)
+        let index_data_offset = pos + 4;
         pos += index_bytes.len() as u32;
 
-        // 设置记录
         pos += calc_mode.len() as u32;
         pos += calc_count.len() as u32;
         pos += ref_mode.len() as u32;
-        pos += delta.len() as u32;
         pos += iteration.len() as u32;
-        pos += guts.len() as u32;
-        pos += def_row_height.len() as u32;
-        pos += wsbool.len() as u32;
-
-        // DefColWidth
-        let defcolwidth_pos = pos;
-        pos += defcolwidth.len() as u32;
-
-        // Dimensions + 打印记录 + 保护记录
-        pos += dims.len() as u32;
+        pos += delta.len() as u32;
+        pos += save_recalc.len() as u32;
         pos += print_headers.len() as u32;
         pos += print_grid.len() as u32;
         pos += grid_set.len() as u32;
-        pos += header.len() as u32;
-        pos += footer.len() as u32;
+        pos += guts.len() as u32;
+        pos += def_row_height.len() as u32;
+        pos += wsbool.len() as u32;
         pos += hcenter.len() as u32;
         pos += vcenter.len() as u32;
         pos += left_margin.len() as u32;
@@ -418,10 +417,12 @@ impl WorkSheet {
         pos += top_margin.len() as u32;
         pos += bottom_margin.len() as u32;
         pos += setup_page.len() as u32;
-        pos += ws_protect.len() as u32;
-        pos += ws_window_protect.len() as u32;
-        pos += scen_protect.len() as u32;
-        pos += obj_protect.len() as u32;
+        pos += ext_089c.len() as u32;
+
+        let defcolwidth_pos = pos;
+        pos += defcolwidth.len() as u32;
+
+        pos += dims.len() as u32;
 
         // 计算每个块的 DBCELL 位置和偏移
         let mut dbcell_offsets: Vec<u32> = Vec::with_capacity(num_blocks as usize);
@@ -429,13 +430,8 @@ impl WorkSheet {
         let mut rgib_rw: Vec<u32> = Vec::with_capacity(num_blocks as usize);
 
         for (_i, bp) in block_data.iter_mut().enumerate() {
-            // 块起始位置 (第一个 ROW 记录的位置)
             let block_start = pos;
 
-            // 计算 first_cell_offsets (rgdb)
-            // 布局: [Row_0][Cell_0][Row_1][Cell_1]...
-            // rgdb[0] = 0 (first CELL immediately follows first ROW)
-            // rgdb[i] = cell_bytes[i-1].len() + row_bytes[i].len() (for i >= 1)
             let mut rgdb: Vec<u16> = Vec::with_capacity(bp.rows_data.len());
             for j in 0..bp.rows_data.len() {
                 if j == 0 {
@@ -447,29 +443,29 @@ impl WorkSheet {
                 }
             }
 
-            // DBCELL 记录的位置
             let block_end = pos + bp.total_rows_size;
             let dbcell_pos = block_end;
 
-            // dbRtrw: 从 DBCELL 起始位置到第一个 ROW 记录的偏移
-            // (负偏移 → u32 回绕)
             let db_rtrw = block_start.wrapping_sub(dbcell_pos);
 
             bp.db_rtrw = db_rtrw;
             bp.first_cell_offsets = rgdb;
 
             dbcell_offsets.push(dbcell_pos);
-            rgib_rw.push(0); // 占位，稍后在 workbook 中修补
+            rgib_rw.push(0);
 
-            // 准备 DBCELL 序列化
             let dbcell = DBCellRecord::new(db_rtrw, bp.first_cell_offsets.clone());
             let dbcell_bytes = dbcell.serialize();
 
             pos = dbcell_pos + dbcell_bytes.len() as u32;
         }
 
-        // 最后加上 Window2 + EOF
+        // 尾部记录
         pos += window2.len() as u32;
+        pos += ext_088b.len() as u32;
+        pos += ext_001d.len() as u32;
+        pos += ext_00ef.len() as u32;
+        pos += ext_0867.len() as u32;
         pos += eof.len() as u32;
 
         // =====================================================================
@@ -479,31 +475,21 @@ impl WorkSheet {
 
         result.extend_from_slice(&bof);
 
-        // INDEX 紧接着 BOF (with relative offsets; workbook will patch absolute FilePointers)
         let index = IndexRecord::new(rw_mic, rw_mac, ib_xf, rgib_rw);
         result.extend_from_slice(&index.serialize());
 
         result.extend_from_slice(&calc_mode);
         result.extend_from_slice(&calc_count);
         result.extend_from_slice(&ref_mode);
-        result.extend_from_slice(&delta);
         result.extend_from_slice(&iteration);
-        result.extend_from_slice(&guts);
-        result.extend_from_slice(&def_row_height);
-        result.extend_from_slice(&wsbool);
-
-        // DefColWidth
-        result.extend_from_slice(&defcolwidth);
-
-        // Dimensions
-        result.extend_from_slice(&dims);
-
-        // 打印和保护记录
+        result.extend_from_slice(&delta);
+        result.extend_from_slice(&save_recalc);
         result.extend_from_slice(&print_headers);
         result.extend_from_slice(&print_grid);
         result.extend_from_slice(&grid_set);
-        result.extend_from_slice(&header);
-        result.extend_from_slice(&footer);
+        result.extend_from_slice(&guts);
+        result.extend_from_slice(&def_row_height);
+        result.extend_from_slice(&wsbool);
         result.extend_from_slice(&hcenter);
         result.extend_from_slice(&vcenter);
         result.extend_from_slice(&left_margin);
@@ -511,12 +497,10 @@ impl WorkSheet {
         result.extend_from_slice(&top_margin);
         result.extend_from_slice(&bottom_margin);
         result.extend_from_slice(&setup_page);
-        result.extend_from_slice(&ws_protect);
-        result.extend_from_slice(&ws_window_protect);
-        result.extend_from_slice(&scen_protect);
-        result.extend_from_slice(&obj_protect);
+        result.extend_from_slice(&ext_089c);
+        result.extend_from_slice(&defcolwidth);
+        result.extend_from_slice(&dims);
 
-        // 行块数据 + DBCELL
         for bp in &block_data {
             for (ref row_bytes, ref cell_bytes) in &bp.rows_data {
                 result.extend_from_slice(row_bytes);
@@ -527,6 +511,10 @@ impl WorkSheet {
         }
 
         result.extend_from_slice(&window2);
+        result.extend_from_slice(&ext_088b);
+        result.extend_from_slice(&ext_001d);
+        result.extend_from_slice(&ext_00ef);
+        result.extend_from_slice(&ext_0867);
         result.extend_from_slice(&eof);
 
         let meta = SheetBiffMeta {

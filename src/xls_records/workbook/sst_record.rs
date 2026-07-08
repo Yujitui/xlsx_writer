@@ -1,4 +1,3 @@
-use super::encode_biff_string_v2;
 use super::BiffRecord;
 use crate::XlsError;
 use std::collections::HashMap;
@@ -308,6 +307,38 @@ impl Default for SharedStringTable {
     }
 }
 
+/// 编码 SST 中的字符串，匹配 Excel 参考文件格式。
+///
+/// Excel 为 SST 字符串添加 Asian phonetic extension（16 字节），
+/// 即使字符串本身不包含亚洲语音信息。flag 的 bit 2 表示扩展存在。
+fn encode_sst_string(s: &str) -> Vec<u8> {
+    let mut result = Vec::new();
+
+    if s.is_ascii() {
+        let bytes = s.as_bytes();
+        let char_count = bytes.len() as u16;
+        result.extend_from_slice(&char_count.to_le_bytes());
+        result.push(0x04); // bit 2 = Asian phonetic extension present
+        result.extend_from_slice(&16u32.to_le_bytes()); // cbExtRst
+        result.extend_from_slice(bytes);
+    } else {
+        let utf16: Vec<u8> = s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let char_count = (utf16.len() / 2) as u16;
+        result.extend_from_slice(&char_count.to_le_bytes());
+        result.push(0x05); // bit 0 = unicode, bit 2 = extension present
+        result.extend_from_slice(&16u32.to_le_bytes()); // cbExtRst
+        result.extend_from_slice(&utf16);
+    }
+
+    // 16 bytes Asian phonetic extension data（与参考文件一致）
+    result.extend_from_slice(&[
+        0x01, 0x00, 0x0c, 0x00, 0x16, 0x00, 0x37, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ]);
+
+    result
+}
+
 pub struct SSTRecord {
     total_refs: usize,
     unique_count: usize,
@@ -326,7 +357,7 @@ impl SSTRecord {
     fn encode_all_strings(&self) -> Vec<u8> {
         let mut data = Vec::new();
         for s in &self.strings {
-            data.extend_from_slice(&encode_biff_string_v2(s));
+            data.extend_from_slice(&encode_sst_string(s));
         }
         data
     }
@@ -540,5 +571,47 @@ mod tests {
         // Check header
         assert_eq!(&data[0..4], &1u32.to_le_bytes());
         assert_eq!(&data[4..8], &1u32.to_le_bytes());
+    }
+
+    /// 单元测试：验证 SST 记录编码与 Excel 2026 参考文件 `工作簿1.xls` 一致。
+    #[test]
+    fn test_sst_record_data_matches_excel_reference() {
+        let mut table = SharedStringTable::new();
+        table.add("aaa".to_string());
+        table.add("bbb".to_string());
+        let record = SSTRecord::from(&table);
+        let data = record.data();
+
+        let expected = vec![
+            // cTotl = 2, cUnique = 2
+            0x02, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00,
+            // "aaa": cch=3, flag=0x04, cbExtRst=16, chars, extData
+            0x03, 0x00, 0x04,
+            0x10, 0x00, 0x00, 0x00,
+            0x61, 0x61, 0x61,
+            0x01, 0x00, 0x0c, 0x00, 0x16, 0x00, 0x37, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // "bbb": cch=3, flag=0x04, cbExtRst=16, chars, extData
+            0x03, 0x00, 0x04,
+            0x10, 0x00, 0x00, 0x00,
+            0x62, 0x62, 0x62,
+            0x01, 0x00, 0x0c, 0x00, 0x16, 0x00, 0x37, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(data, expected, "SST 数据与 Excel 参考不匹配");
+    }
+
+    #[test]
+    fn test_sst_string_unicode_has_extension() {
+        let encoded = encode_sst_string("测试");
+        // cch=2, flag=0x05 (unicode + extension), cbExtRst=16
+        assert_eq!(&encoded[0..2], &2u16.to_le_bytes());
+        assert_eq!(encoded[2], 0x05);
+        assert_eq!(&encoded[3..7], &16u32.to_le_bytes());
+        // 2 UTF-16 code units = 4 bytes
+        assert_eq!(&encoded[7..11], &[0x4B, 0x6D, 0xD5, 0x8B]);
+        // followed by 16-byte extension
+        assert_eq!(encoded.len(), 11 + 16);
     }
 }

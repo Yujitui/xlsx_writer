@@ -1175,70 +1175,35 @@ impl Workbook {
         // BookBool
         result.extend_from_slice(&BookBoolRecord::default().serialize());
 
-        // Fonts (8 fonts: 4x Arial + 1x Times New Roman + 3x Arial)
+        // Fonts (22 records from Excel reference)
         result.extend_from_slice(&self.write_xls_default_fonts());
 
-        // Number Formats
+        // Number Formats (12 records from Excel reference)
         result.extend_from_slice(&self.write_xls_default_formats());
 
-        // XF records
+        // XF records (62 records from Excel reference)
         result.extend_from_slice(&self.write_xls_default_xf_records());
 
-        // Style
-        result.extend_from_slice(&StyleRecord::default().serialize());
-
-        // Palette
-        result.extend_from_slice(&PaletteRecord::default().serialize());
-
-        // UseSelfs
-        result.extend_from_slice(&UseSelfsRecord::default().serialize());
+        // BIFF8 扩展记录（样式定义、主题等）
+        use crate::xls_records::workbook::excel_defaults;
+        result.extend_from_slice(&excel_defaults::serialize_all_extensions());
 
         result
     }
 
-    /// 写入默认字体记录
+    /// 写入默认字体记录（使用 Excel 参考数据）
     fn write_xls_default_fonts(&self) -> Vec<u8> {
-        use crate::xls_records::*;
-        let mut result = Vec::new();
-
-        for _ in 0..5 {
-            let font = Font::new("Arial");
-            result.extend_from_slice(&FontRecord::new(font).serialize());
-        }
-
-        let times = Font::new("Times New Roman").with_bold();
-        result.extend_from_slice(&FontRecord::new(times).serialize());
-
-        for _ in 0..2 {
-            let font = Font::new("Arial");
-            result.extend_from_slice(&FontRecord::new(font).serialize());
-        }
-
-        result
+        crate::xls_records::workbook::excel_defaults::serialize_default_fonts()
     }
 
-    /// 写入默认数字格式记录
+    /// 写入默认数字格式记录（使用 Excel 参考数据）
     fn write_xls_default_formats(&self) -> Vec<u8> {
-        use crate::xls_records::*;
-        let mut result = Vec::new();
-
-        let general_format = NumberFormatRecord::new(0x00A4, "General");
-        result.extend_from_slice(&general_format.serialize());
-
-        result
+        crate::xls_records::workbook::excel_defaults::serialize_default_formats()
     }
 
-    /// 写入默认 XF 记录
+    /// 写入默认 XF 记录（使用 Excel 参考数据）
     fn write_xls_default_xf_records(&self) -> Vec<u8> {
-        use crate::xls_records::*;
-        let mut result = Vec::new();
-
-        // 使用 16 个默认 XF 记录（简化实现，全部是 Style XF）
-        for _ in 0..16 {
-            result.extend_from_slice(&XFRecord::default().serialize());
-        }
-
-        result
+        crate::xls_records::workbook::excel_defaults::serialize_default_xf_records()
     }
 
     // ------------------------------------------------------------------------

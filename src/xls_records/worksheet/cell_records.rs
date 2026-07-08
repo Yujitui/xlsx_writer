@@ -399,6 +399,34 @@ impl BiffRecord for FormulaRecord {
 }
 
 fn encode_rk_value(num: f64) -> Option<i32> {
+    // Excel prefers floating-point RK (type 0 / 1) when the value can be
+    // represented exactly by the upper 32 bits of an IEEE 754 double.
+    // For integers like 123.0 and 321.0 this produces RK type 0, matching Excel.
+
+    // Type 0: direct float RK
+    let bits = num.to_bits();
+    let upper32 = (bits >> 32) as u32;
+    if (upper32 & 0x3) == 0 {
+        let rk = upper32 as i32;
+        if decode_rk_value(rk) == num {
+            return Some(rk);
+        }
+    }
+
+    // Type 1: float RK scaled by 100
+    let scaled = num * 100.0;
+    if scaled.is_finite() {
+        let scaled_bits = scaled.to_bits();
+        let scaled_upper32 = (scaled_bits >> 32) as u32;
+        if (scaled_upper32 & 0x3) == 0 {
+            let rk = ((scaled_upper32 as i32) & !3) | 1;
+            if decode_rk_value(rk) == num {
+                return Some(rk);
+            }
+        }
+    }
+
+    // Type 2: integer RK
     if -536870912.0 <= num && num < 536870912.0 {
         let inum = num as i32;
         if (inum as f64) == num {
@@ -406,8 +434,9 @@ fn encode_rk_value(num: f64) -> Option<i32> {
         }
     }
 
+    // Type 3: integer RK scaled by 100
     let temp = num * 100.0;
-    if -536870912.0 <= temp && temp < 536870912.0 {
+    if temp.is_finite() && -536870912.0 <= temp && temp < 536870912.0 {
         let itemp = temp.round() as i32;
         if (itemp as f64) / 100.0 == num {
             return Some(3 | (itemp << 2));
@@ -617,6 +646,50 @@ mod tests {
         let result = row_data_to_cell_records(0, &row_data, 0x0F, &mut sst);
 
         assert!(!result.is_empty());
+    }
+
+    /// 单元测试：验证 ['aaa','bbb'] 和 [123,321] 生成的单元格记录
+    /// 与 Excel 2026 参考文件 `工作簿1.xls` 的字节完全一致。
+    #[test]
+    fn test_row_data_to_cell_records_match_excel_reference() {
+        use crate::xls_records::workbook::sst_record::SharedStringTable;
+
+        let mut sst = SharedStringTable::new();
+
+        // 第一行：['aaa', 'bbb'] → 两条 LabelSST
+        let row0 = vec![
+            Some(Cell::Text("aaa".to_string())),
+            Some(Cell::Text("bbb".to_string())),
+        ];
+        let bytes0 = row_data_to_cell_records(0, &row0, 15, &mut sst);
+        let expected0 = vec![
+            // LabelSST: id=0x00FD, len=10, row=0, col=0, xf=15, sst=0
+            0xFD, 0x00, 0x0A, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // LabelSST: id=0x00FD, len=10, row=0, col=1, xf=15, sst=1
+            0xFD, 0x00, 0x0A, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x0F, 0x00, 0x01, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(bytes0, expected0, "第一行文本单元格记录与 Excel 参考不匹配");
+
+        // 第二行：[123, 321] → 一条 MulRk（Excel 使用 float RK type=0）
+        let row1 = vec![
+            Some(Cell::Number(123.0)),
+            Some(Cell::Number(321.0)),
+        ];
+        let bytes1 = row_data_to_cell_records(1, &row1, 15, &mut sst);
+        let expected1 = vec![
+            // MulRk: id=0x00BD, len=18, row=1, first_col=0
+            0xBD, 0x00, 0x12, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+            // xf=15, rk=0x405EC000 (123.0)
+            0x0F, 0x00, 0x00, 0xC0, 0x5E, 0x40,
+            // xf=15, rk=0x40741000 (321.0)
+            0x0F, 0x00, 0x00, 0x10, 0x74, 0x40,
+            // last_col=1
+            0x01, 0x00,
+        ];
+        assert_eq!(bytes1, expected1, "第二行数字单元格记录与 Excel 参考不匹配");
     }
 
     #[test]

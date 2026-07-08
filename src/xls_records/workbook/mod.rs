@@ -32,6 +32,7 @@ pub mod window1_record;
 pub mod window_protect_record;
 pub mod write_access_record;
 pub mod xf_record;
+pub mod excel_defaults;
 
 pub use crate::xls_records::BiffRecord;
 pub use crate::xls_records::{encode_biff_string_v1, encode_biff_string_v2};
