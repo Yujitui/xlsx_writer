@@ -3,6 +3,12 @@
 //! 这些数据用于替换生成文件中的默认值，以精确匹配 Excel 的输出格式。
 //! 提取方式：解析参考文件的 Workbook CFB 流，逐记录提取二进制载荷。
 
+use crate::xls_records::workbook::xf_record::{
+    Alignment, Borders, Pattern, XF, XFRecord, XFType,
+};
+use crate::xls_records::BiffRecord;
+use crate::xls_records::NumberFormatRecord;
+
 /// 将十六进制字符串解码为字节向量
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     (0..hex.len()).step_by(2)
@@ -31,218 +37,172 @@ impl HexBiffRecord {
     }
 }
 
-pub const FONT_0: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000080090010000000086000201497bbf7e");
-pub const FONT_1: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000080090010000000086000201497bbf7e");
-pub const FONT_2: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000080090010000000086000201497bbf7e");
-pub const FONT_3: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000080090010000000086000201497bbf7e");
-pub const FONT_4: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000080090010000000086000201497bbf7e");
-pub const FONT_5: HexBiffRecord = HexBiffRecord::new(0x0031, "68010000380090010000000086000801497bbf7e20004c006900670068007400");
-pub const FONT_6: HexBiffRecord = HexBiffRecord::new(0x0031, "2c0101003800bc020000000086000201497bbf7e");
-pub const FONT_7: HexBiffRecord = HexBiffRecord::new(0x0031, "040101003800bc020000000086000201497bbf7e");
-pub const FONT_8: HexBiffRecord = HexBiffRecord::new(0x0031, "dc0001003800bc020000000086000201497bbf7e");
-pub const FONT_9: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000110090010000000086000201497bbf7e");
-pub const FONT_10: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000140090010000000086000201497bbf7e");
-pub const FONT_11: HexBiffRecord = HexBiffRecord::new(0x0031, "f00000003c0090010000000086000201497bbf7e");
-pub const FONT_12: HexBiffRecord = HexBiffRecord::new(0x0031, "f00000003e0090010000000086000201497bbf7e");
-pub const FONT_13: HexBiffRecord = HexBiffRecord::new(0x0031, "f00001003f00bc020000000086000201497bbf7e");
-pub const FONT_14: HexBiffRecord = HexBiffRecord::new(0x0031, "f00001003400bc020000000086000201497bbf7e");
-pub const FONT_15: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000340090010000000086000201497bbf7e");
-pub const FONT_16: HexBiffRecord = HexBiffRecord::new(0x0031, "f00001000900bc020000000086000201497bbf7e");
-pub const FONT_17: HexBiffRecord = HexBiffRecord::new(0x0031, "f00000000a0090010000000086000201497bbf7e");
-pub const FONT_18: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000200170090010000000086000201497bbf7e");
-pub const FONT_19: HexBiffRecord = HexBiffRecord::new(0x0031, "f00001000800bc020000000086000201497bbf7e");
-pub const FONT_20: HexBiffRecord = HexBiffRecord::new(0x0031, "f0000000090090010000000086000201497bbf7e");
-pub const FONT_21: HexBiffRecord = HexBiffRecord::new(0x0031, "b4000000ff7f90010000000086000201497bbf7e");
-
 pub fn serialize_default_fonts() -> Vec<u8> {
+    use super::font_record::{Font, FontRecord};
+    use crate::xls_records::BiffRecord;
+
+    fn dx(height: u16, colour: u16, weight: u16, options: u16, name: &str) -> FontRecord {
+        FontRecord::new(Font {
+            height,
+            options,
+            colour_index: colour,
+            weight,
+            escapement: 0,
+            underline: 0,
+            family: 0,
+            charset: 0x86,
+            name: name.to_string(),
+        })
+    }
+
     let mut buf = Vec::new();
-    buf.extend_from_slice(&FONT_0.serialize());
-    buf.extend_from_slice(&FONT_1.serialize());
-    buf.extend_from_slice(&FONT_2.serialize());
-    buf.extend_from_slice(&FONT_3.serialize());
-    buf.extend_from_slice(&FONT_4.serialize());
-    buf.extend_from_slice(&FONT_5.serialize());
-    buf.extend_from_slice(&FONT_6.serialize());
-    buf.extend_from_slice(&FONT_7.serialize());
-    buf.extend_from_slice(&FONT_8.serialize());
-    buf.extend_from_slice(&FONT_9.serialize());
-    buf.extend_from_slice(&FONT_10.serialize());
-    buf.extend_from_slice(&FONT_11.serialize());
-    buf.extend_from_slice(&FONT_12.serialize());
-    buf.extend_from_slice(&FONT_13.serialize());
-    buf.extend_from_slice(&FONT_14.serialize());
-    buf.extend_from_slice(&FONT_15.serialize());
-    buf.extend_from_slice(&FONT_16.serialize());
-    buf.extend_from_slice(&FONT_17.serialize());
-    buf.extend_from_slice(&FONT_18.serialize());
-    buf.extend_from_slice(&FONT_19.serialize());
-    buf.extend_from_slice(&FONT_20.serialize());
-    buf.extend_from_slice(&FONT_21.serialize());
+    let fonts = [
+        // [0-4] 5× 12pt 等线 colour=0x08
+        dx(0x00F0, 0x0008, 0x0190, 0x0000, "等线"),
+        dx(0x00F0, 0x0008, 0x0190, 0x0000, "等线"),
+        dx(0x00F0, 0x0008, 0x0190, 0x0000, "等线"),
+        dx(0x00F0, 0x0008, 0x0190, 0x0000, "等线"),
+        dx(0x00F0, 0x0008, 0x0190, 0x0000, "等线"),
+        // [5] 9pt 等线 auto-colour
+        dx(0x00B4, 0x7FFF, 0x0190, 0x0000, "等线"),
+        // [6] 12pt 等线 colour=0x08 (same as 0-4)
+        dx(0x00F0, 0x0008, 0x0190, 0x0000, "等线"),
+        // [7] 18pt 等线 Light colour=0x38
+        dx(0x0168, 0x0038, 0x0190, 0x0000, "等线 Light"),
+        // [8] 15pt bold colour=0x38
+        dx(0x012C, 0x0038, 0x02BC, 0x0001, "等线"),
+        // [9] 13pt bold colour=0x38
+        dx(0x0104, 0x0038, 0x02BC, 0x0001, "等线"),
+        // [10] 11pt bold colour=0x38
+        dx(0x00DC, 0x0038, 0x02BC, 0x0001, "等线"),
+        // [11] 12pt colour=0x14
+        dx(0x00F0, 0x0014, 0x0190, 0x0000, "等线"),
+        // [12] 12pt colour=0x11
+        dx(0x00F0, 0x0011, 0x0190, 0x0000, "等线"),
+        // [13] 12pt bold colour=0x08
+        dx(0x00F0, 0x0008, 0x02BC, 0x0001, "等线"),
+        // [14] 12pt bold colour=0x34
+        dx(0x00F0, 0x0034, 0x02BC, 0x0001, "等线"),
+        // [15] 12pt bold colour=0x09
+        dx(0x00F0, 0x0009, 0x02BC, 0x0001, "等线"),
+        // [16] 12pt italic colour=0x17
+        dx(0x00F0, 0x0017, 0x0190, 0x0002, "等线"),
+        // [17] 12pt colour=0x0A
+        dx(0x00F0, 0x000A, 0x0190, 0x0000, "等线"),
+        // [18] 12pt colour=0x34
+        dx(0x00F0, 0x0034, 0x0190, 0x0000, "等线"),
+        // [19] 12pt colour=0x3C
+        dx(0x00F0, 0x003C, 0x0190, 0x0000, "等线"),
+        // [20] 12pt bold colour=0x3F
+        dx(0x00F0, 0x003F, 0x02BC, 0x0001, "等线"),
+        // [21] 12pt colour=0x3E
+        dx(0x00F0, 0x003E, 0x0190, 0x0000, "等线"),
+        // [22] 12pt colour=0x09
+        dx(0x00F0, 0x0009, 0x0190, 0x0000, "等线"),
+    ];
+    for f in &fonts {
+        buf.extend_from_slice(&f.serialize());
+    }
     buf
 }
-
-pub const FORMAT_0: HexBiffRecord = HexBiffRecord::new(0x041E, "050017000022a522232c2323305f293b5c2822a522232c2323305c29");
-pub const FORMAT_1: HexBiffRecord = HexBiffRecord::new(0x041E, "06001c000022a522232c2323305f293b5b5265645d5c2822a522232c2323305c29");
-pub const FORMAT_2: HexBiffRecord = HexBiffRecord::new(0x041E, "07001d000022a522232c2323302e30305f293b5c2822a522232c2323302e30305c29");
-pub const FORMAT_3: HexBiffRecord = HexBiffRecord::new(0x041E, "080022000022a522232c2323302e30305f293b5b5265645d5c2822a522232c2323302e30305c29");
-pub const FORMAT_4: HexBiffRecord = HexBiffRecord::new(0x041E, "2a003200005f2822a5222a20232c2323305f293b5f2822a5222a205c28232c2323305c293b5f2822a5222a20222d225f293b5f28405f29");
-pub const FORMAT_5: HexBiffRecord = HexBiffRecord::new(0x041E, "29002900005f282a20232c2323305f293b5f282a205c28232c2323305c293b5f282a20222d225f293b5f28405f29");
-pub const FORMAT_6: HexBiffRecord = HexBiffRecord::new(0x041E, "2c003a00005f2822a5222a20232c2323302e30305f293b5f2822a5222a205c28232c2323302e30305c293b5f2822a5222a20222d223f3f5f293b5f28405f29");
-pub const FORMAT_7: HexBiffRecord = HexBiffRecord::new(0x041E, "2b003100005f282a20232c2323302e30305f293b5f282a205c28232c2323302e30305c293b5f282a20222d223f3f5f293b5f28405f29");
-pub const FORMAT_8: HexBiffRecord = HexBiffRecord::new(0x041E, "17001500005c24232c2323305f293b5c285c24232c2323305c29");
-pub const FORMAT_9: HexBiffRecord = HexBiffRecord::new(0x041E, "18001a00005c24232c2323305f293b5b5265645d5c285c24232c2323305c29");
-pub const FORMAT_10: HexBiffRecord = HexBiffRecord::new(0x041E, "19001b00005c24232c2323302e30305f293b5c285c24232c2323302e30305c29");
-pub const FORMAT_11: HexBiffRecord = HexBiffRecord::new(0x041E, "1a002000005c24232c2323302e30305f293b5b5265645d5c285c24232c2323302e30305c29");
 
 pub fn serialize_default_formats() -> Vec<u8> {
     let mut buf = Vec::new();
-    buf.extend_from_slice(&FORMAT_0.serialize());
-    buf.extend_from_slice(&FORMAT_1.serialize());
-    buf.extend_from_slice(&FORMAT_2.serialize());
-    buf.extend_from_slice(&FORMAT_3.serialize());
-    buf.extend_from_slice(&FORMAT_4.serialize());
-    buf.extend_from_slice(&FORMAT_5.serialize());
-    buf.extend_from_slice(&FORMAT_6.serialize());
-    buf.extend_from_slice(&FORMAT_7.serialize());
-    buf.extend_from_slice(&FORMAT_8.serialize());
-    buf.extend_from_slice(&FORMAT_9.serialize());
-    buf.extend_from_slice(&FORMAT_10.serialize());
-    buf.extend_from_slice(&FORMAT_11.serialize());
+    let formats = [
+        (5, "\"¥\"#,##0_);\\(\"¥\"#,##0\\)"),
+        (6, "\"¥\"#,##0_);[Red]\\(\"¥\"#,##0\\)"),
+        (7, "\"¥\"#,##0.00_);\\(\"¥\"#,##0.00\\)"),
+        (8, "\"¥\"#,##0.00_);[Red]\\(\"¥\"#,##0.00\\)"),
+        (42, "_(\"¥\"* #,##0_);_(\"¥\"* \\(#,##0\\);_(\"¥\"* \"-\"_);_(@_)"),
+        (41, "_(* #,##0_);_(* \\(#,##0\\);_(* \"-\"_);_(@_)"),
+        (44, "_(\"¥\"* #,##0.00_);_(\"¥\"* \\(#,##0.00\\);_(\"¥\"* \"-\"??_);_(@_)"),
+        (43, "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)"),
+        (23, "\\$#,##0_);\\(\\$#,##0\\)"),
+        (24, "\\$#,##0_);[Red]\\(\\$#,##0\\)"),
+        (25, "\\$#,##0.00_);\\(\\$#,##0.00\\)"),
+        (26, "\\$#,##0.00_);[Red]\\(\\$#,##0.00\\)"),
+    ];
+    for (ifmt, s) in &formats {
+        let rec = NumberFormatRecord::new(*ifmt, s);
+        buf.extend_from_slice(&rec.serialize());
+    }
     buf
 }
 
-pub const XF_0: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000000000000000000000c020");
-pub const XF_1: HexBiffRecord = HexBiffRecord::new(0x00E0, "01000000f5ff100000f40000000000000000c020");
-pub const XF_2: HexBiffRecord = HexBiffRecord::new(0x00E0, "01000000f5ff100000f40000000000000000c020");
-pub const XF_3: HexBiffRecord = HexBiffRecord::new(0x00E0, "02000000f5ff100000f40000000000000000c020");
-pub const XF_4: HexBiffRecord = HexBiffRecord::new(0x00E0, "02000000f5ff100000f40000000000000000c020");
-pub const XF_5: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_6: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_7: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_8: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_9: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_10: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_11: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_12: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_13: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_14: HexBiffRecord = HexBiffRecord::new(0x00E0, "00000000f5ff100000f40000000000000000c020");
-pub const XF_15: HexBiffRecord = HexBiffRecord::new(0x00E0, "000000000100100000000000000000000002c020");
-pub const XF_16: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b400000000000000049b20");
-pub const XF_17: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004af20");
-pub const XF_18: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004aa20");
-pub const XF_19: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b400000000000000049b20");
-pub const XF_20: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004ad20");
-pub const XF_21: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004aa20");
-pub const XF_22: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004ac20");
-pub const XF_23: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004af20");
-pub const XF_24: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004b120");
-pub const XF_25: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004ac20");
-pub const XF_26: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004ad20");
-pub const XF_27: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004aa20");
-pub const XF_28: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004b120");
-pub const XF_29: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004af20");
-pub const XF_30: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004b920");
-pub const XF_31: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b40000000000000004b020");
-pub const XF_32: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b400000000000000049920");
-pub const XF_33: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff100000b400000000000000048b20");
-pub const XF_34: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000900f5ff100000f80000000000000000c020");
-pub const XF_35: HexBiffRecord = HexBiffRecord::new(0x00E0, "06000000f5ff100000f40000000000000000c020");
-pub const XF_36: HexBiffRecord = HexBiffRecord::new(0x00E0, "07000000f5ff100000d400500000800a0000c020");
-pub const XF_37: HexBiffRecord = HexBiffRecord::new(0x00E0, "08000000f5ff100000d40050000080180000c020");
-pub const XF_38: HexBiffRecord = HexBiffRecord::new(0x00E0, "09000000f5ff100000d40020000080180000c020");
-pub const XF_39: HexBiffRecord = HexBiffRecord::new(0x00E0, "09000000f5ff100000f40000000000000000c020");
-pub const XF_40: HexBiffRecord = HexBiffRecord::new(0x00E0, "0b000000f5ff100000b40000000000000004ad20");
-pub const XF_41: HexBiffRecord = HexBiffRecord::new(0x00E0, "0a000000f5ff100000b40000000000000004aa20");
-pub const XF_42: HexBiffRecord = HexBiffRecord::new(0x00E0, "14000000f5ff100000d400610000950a0000c020");
-pub const XF_43: HexBiffRecord = HexBiffRecord::new(0x00E0, "05002c00f5ff100000f80000000000000000c020");
-pub const XF_44: HexBiffRecord = HexBiffRecord::new(0x00E0, "05002a00f5ff100000f80000000000000000c020");
-pub const XF_45: HexBiffRecord = HexBiffRecord::new(0x00E0, "0f000000f5ff100000941111970b970b00049620");
-pub const XF_46: HexBiffRecord = HexBiffRecord::new(0x00E0, "11000000f5ff100000946666bf1fbf1f0004b720");
-pub const XF_47: HexBiffRecord = HexBiffRecord::new(0x00E0, "13000000f5ff100000f40000000000000000c020");
-pub const XF_48: HexBiffRecord = HexBiffRecord::new(0x00E0, "12000000f5ff100000f40000000000000000c020");
-pub const XF_49: HexBiffRecord = HexBiffRecord::new(0x00E0, "10000000f5ff100000d400600000001a0000c020");
-pub const XF_50: HexBiffRecord = HexBiffRecord::new(0x00E0, "05002b00f5ff100000f80000000000000000c020");
-pub const XF_51: HexBiffRecord = HexBiffRecord::new(0x00E0, "05002900f5ff100000f80000000000000000c020");
-pub const XF_52: HexBiffRecord = HexBiffRecord::new(0x00E0, "0c000000f5ff100000b40000000000000004ab20");
-pub const XF_53: HexBiffRecord = HexBiffRecord::new(0x00E0, "0e000000f5ff100000941111bf1fbf1f00049620");
-pub const XF_54: HexBiffRecord = HexBiffRecord::new(0x00E0, "0d000000f5ff100000941111970b970b0004af20");
-pub const XF_55: HexBiffRecord = HexBiffRecord::new(0x00E0, "15000000f5ff100000b400000000000000049520");
-pub const XF_56: HexBiffRecord = HexBiffRecord::new(0x00E0, "15000000f5ff100000b40000000000000004b520");
-pub const XF_57: HexBiffRecord = HexBiffRecord::new(0x00E0, "15000000f5ff100000b40000000000000004b920");
-pub const XF_58: HexBiffRecord = HexBiffRecord::new(0x00E0, "15000000f5ff100000b40000000000000004a820");
-pub const XF_59: HexBiffRecord = HexBiffRecord::new(0x00E0, "15000000f5ff100000b400000000000000049920");
-pub const XF_60: HexBiffRecord = HexBiffRecord::new(0x00E0, "15000000f5ff100000b40000000000000004b920");
-pub const XF_61: HexBiffRecord = HexBiffRecord::new(0x00E0, "05000000f5ff1000009c1111160b160b00049a20");
-
 pub fn serialize_default_xf_records() -> Vec<u8> {
     let mut buf = Vec::new();
-    buf.extend_from_slice(&XF_0.serialize());
-    buf.extend_from_slice(&XF_1.serialize());
-    buf.extend_from_slice(&XF_2.serialize());
-    buf.extend_from_slice(&XF_3.serialize());
-    buf.extend_from_slice(&XF_4.serialize());
-    buf.extend_from_slice(&XF_5.serialize());
-    buf.extend_from_slice(&XF_6.serialize());
-    buf.extend_from_slice(&XF_7.serialize());
-    buf.extend_from_slice(&XF_8.serialize());
-    buf.extend_from_slice(&XF_9.serialize());
-    buf.extend_from_slice(&XF_10.serialize());
-    buf.extend_from_slice(&XF_11.serialize());
-    buf.extend_from_slice(&XF_12.serialize());
-    buf.extend_from_slice(&XF_13.serialize());
-    buf.extend_from_slice(&XF_14.serialize());
-    buf.extend_from_slice(&XF_15.serialize());
-    buf.extend_from_slice(&XF_16.serialize());
-    buf.extend_from_slice(&XF_17.serialize());
-    buf.extend_from_slice(&XF_18.serialize());
-    buf.extend_from_slice(&XF_19.serialize());
-    buf.extend_from_slice(&XF_20.serialize());
-    buf.extend_from_slice(&XF_21.serialize());
-    buf.extend_from_slice(&XF_22.serialize());
-    buf.extend_from_slice(&XF_23.serialize());
-    buf.extend_from_slice(&XF_24.serialize());
-    buf.extend_from_slice(&XF_25.serialize());
-    buf.extend_from_slice(&XF_26.serialize());
-    buf.extend_from_slice(&XF_27.serialize());
-    buf.extend_from_slice(&XF_28.serialize());
-    buf.extend_from_slice(&XF_29.serialize());
-    buf.extend_from_slice(&XF_30.serialize());
-    buf.extend_from_slice(&XF_31.serialize());
-    buf.extend_from_slice(&XF_32.serialize());
-    buf.extend_from_slice(&XF_33.serialize());
-    buf.extend_from_slice(&XF_34.serialize());
-    buf.extend_from_slice(&XF_35.serialize());
-    buf.extend_from_slice(&XF_36.serialize());
-    buf.extend_from_slice(&XF_37.serialize());
-    buf.extend_from_slice(&XF_38.serialize());
-    buf.extend_from_slice(&XF_39.serialize());
-    buf.extend_from_slice(&XF_40.serialize());
-    buf.extend_from_slice(&XF_41.serialize());
-    buf.extend_from_slice(&XF_42.serialize());
-    buf.extend_from_slice(&XF_43.serialize());
-    buf.extend_from_slice(&XF_44.serialize());
-    buf.extend_from_slice(&XF_45.serialize());
-    buf.extend_from_slice(&XF_46.serialize());
-    buf.extend_from_slice(&XF_47.serialize());
-    buf.extend_from_slice(&XF_48.serialize());
-    buf.extend_from_slice(&XF_49.serialize());
-    buf.extend_from_slice(&XF_50.serialize());
-    buf.extend_from_slice(&XF_51.serialize());
-    buf.extend_from_slice(&XF_52.serialize());
-    buf.extend_from_slice(&XF_53.serialize());
-    buf.extend_from_slice(&XF_54.serialize());
-    buf.extend_from_slice(&XF_55.serialize());
-    buf.extend_from_slice(&XF_56.serialize());
-    buf.extend_from_slice(&XF_57.serialize());
-    buf.extend_from_slice(&XF_58.serialize());
-    buf.extend_from_slice(&XF_59.serialize());
-    buf.extend_from_slice(&XF_60.serialize());
-    buf.extend_from_slice(&XF_61.serialize());
+    let xf_records: [XFRecord; 62] = [
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, used_attributes: 0x00, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 1, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 1, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 2, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 2, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 0, alignment: Alignment { vert: 1, ..Default::default() }, used_attributes: 0x00, ..Default::default() }, xf_type: XFType::Cell, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 27, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 47, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 42, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 27, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 45, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 42, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 44, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 47, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 49, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 44, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 45, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 42, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 49, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 47, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 57, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 48, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 25, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 7, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 11, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 5, format_idx: 9, alignment: Alignment { vert: 1, ..Default::default() }, used_attributes: 0xf8, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 8, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 9, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { bottom: 5, bottom_colour: 21, ..Default::default() }, used_attributes: 0xd4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 10, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { bottom: 5, bottom_colour: 49, ..Default::default() }, used_attributes: 0xd4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 11, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { bottom: 2, bottom_colour: 49, ..Default::default() }, used_attributes: 0xd4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 11, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 12, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 45, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 13, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 42, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 14, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { top: 1, bottom: 6, top_colour: 21, bottom_colour: 21, ..Default::default() }, used_attributes: 0xd4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 5, format_idx: 44, alignment: Alignment { vert: 1, ..Default::default() }, used_attributes: 0xf8, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 5, format_idx: 42, alignment: Alignment { vert: 1, ..Default::default() }, used_attributes: 0xf8, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 15, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { left: 1, right: 1, top: 1, bottom: 1, left_colour: 23, right_colour: 23, top_colour: 23, bottom_colour: 23, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 22, ..Default::default() }, used_attributes: 0x94, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 16, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { left: 6, right: 6, top: 6, bottom: 6, left_colour: 63, right_colour: 63, top_colour: 63, bottom_colour: 63, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 55, ..Default::default() }, used_attributes: 0x94, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 17, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 18, alignment: Alignment { vert: 1, ..Default::default() }, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 19, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { bottom: 6, bottom_colour: 52, ..Default::default() }, used_attributes: 0xd4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 5, format_idx: 43, alignment: Alignment { vert: 1, ..Default::default() }, used_attributes: 0xf8, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 5, format_idx: 41, alignment: Alignment { vert: 1, ..Default::default() }, used_attributes: 0xf8, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 20, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 43, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 21, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { left: 1, right: 1, top: 1, bottom: 1, left_colour: 63, right_colour: 63, top_colour: 63, bottom_colour: 63, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 22, ..Default::default() }, used_attributes: 0x94, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 22, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { left: 1, right: 1, top: 1, bottom: 1, left_colour: 23, right_colour: 23, top_colour: 23, bottom_colour: 23, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 47, ..Default::default() }, used_attributes: 0x94, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 23, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 21, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 23, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 53, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 23, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 57, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 23, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 40, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 23, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 25, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 23, alignment: Alignment { vert: 1, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 57, ..Default::default() }, used_attributes: 0xb4, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+        XFRecord { xf: XF { font_idx: 5, alignment: Alignment { vert: 1, ..Default::default() }, borders: Borders { left: 1, right: 1, top: 1, bottom: 1, left_colour: 22, right_colour: 22, top_colour: 22, bottom_colour: 22, ..Default::default() }, pattern: Pattern { pattern: 1, pattern_fore_colour: 26, ..Default::default() }, used_attributes: 0x9c, ..Default::default() }, xf_type: XFType::Style, parent_index: 0 },
+    ];
+    for rec in &xf_records {
+        buf.extend_from_slice(&rec.serialize());
+    }
     buf
 }
 
 // ===== BIFF8 Extension Records =====
-pub const EXT_087C_0: HexBiffRecord = HexBiffRecord::new(0x087C, "7c080000000000000000000000003e00fb7db054");
+pub const EXT_087C_0: HexBiffRecord = HexBiffRecord::new(0x087C, "7c080000000000000000000000003e0017a3bf8a");
 
 pub fn serialize_ext_087c() -> Vec<u8> {
     let mut buf = Vec::new();
@@ -251,67 +211,58 @@ pub fn serialize_ext_087c() -> Vec<u8> {
 }
 
 pub const EXT_087D_0: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000000000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_1: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000100000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_2: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000200000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_3: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000300000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_4: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000400000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_5: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000500000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_6: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000600000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_7: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000700000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_8: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000800000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_9: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000900000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_10: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000a00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_11: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000b00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_12: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000c00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_13: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000d00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_14: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000e00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_15: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000f00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_16: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003200000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_17: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003300000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_18: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002b00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_19: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002c00000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_20: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002200000002000d00140003000000010000002e30305c295f282a0e00050002");
-pub const EXT_087D_21: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002300000002000d00140003000000030000002e30305c295f282a0e00050001");
-pub const EXT_087D_22: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002400000003000d00140003000000030000002e30305c295f282a0e000500020800140003000000040000003b5f28405f292020");
-pub const EXT_087D_23: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002500000003000d00140003000000030000002e30305c295f282a0e00050002080014000300ff3f040000003b5f28405f292020");
-pub const EXT_087D_24: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002600000003000d00140003000000030000002e30305c295f282a0e000500020800140003003233040000003b5f28405f292020");
-pub const EXT_087D_25: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002700000002000d00140003000000030000002e30305c295f282a0e00050002");
-pub const EXT_087D_26: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002900000003000d00140002000000006100ff2e30305c295f282a0e000500020400140002000000c6efceff3b5f28405f292020");
-pub const EXT_087D_27: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002800000003000d001400020000009c0006ff2e30305c295f282a0e000500020400140002000000ffc7ceff3b5f28405f292020");
-pub const EXT_087D_28: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003400000003000d001400020000009c5700ff2e30305c295f282a0e000500020400140002000000ffeb9cff3b5f28405f292020");
-pub const EXT_087D_29: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003600000007000d001400020000003f3f76ff2e30305c295f282a0e000500020400140002000000ffcc99ff3b5f28405f29202007001400020000007f7f7fff202020202020202008001400020000007f7f7fff202020202020202009001400020000007f7f7fff00000000000000000a001400020000007f7f7fff0000000000000000");
-pub const EXT_087D_30: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003500000007000d001400020000003f3f3fff2e30305c295f282a0e000500020400140002000000f2f2f2ff3b5f28405f29202007001400020000003f3f3fff202020202020202008001400020000003f3f3fff202020202020202009001400020000003f3f3fff00000000000000000a001400020000003f3f3fff0000000000000000");
-pub const EXT_087D_31: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002d00000007000d00140002000000fa7d00ff2e30305c295f282a0e000500020400140002000000f2f2f2ff3b5f28405f29202007001400020000007f7f7fff202020202020202008001400020000007f7f7fff202020202020202009001400020000007f7f7fff00000000000000000a001400020000007f7f7fff0000000000000000");
-pub const EXT_087D_32: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003100000003000d00140002000000fa7d00ff2e30305c295f282a0e000500020800140002000000ff8001ff3b5f28405f292020");
-pub const EXT_087D_33: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002e00000007000d00140003000000000000002e30305c295f282a0e000500020400140002000000a5a5a5ff3b5f28405f29202007001400020000003f3f3fff202020202020202008001400020000003f3f3fff202020202020202009001400020000003f3f3fff00000000000000000a001400020000003f3f3fff0000000000000000");
-pub const EXT_087D_34: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003000000002000d00140002000000ff0000ff2e30305c295f282a0e00050002");
-pub const EXT_087D_35: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003d00000007000d00140003000000010000002e30305c295f282a0e000500020400140002000000ffffccff3b5f28405f2920200700140002000000b2b2b2ff20202020202020200800140002000000b2b2b2ff20202020202020200900140002000000b2b2b2ff00000000000000000a00140002000000b2b2b2ff0000000000000000");
-pub const EXT_087D_36: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002f00000002000d001400020000007f7f7fff2e30305c295f282a0e00050002");
+pub const EXT_087D_1: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000500000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_2: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000600000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_3: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000700000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_4: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000800000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_5: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000900000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_6: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000a00000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_7: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000b00000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_8: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000c00000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_9: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000d00000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_10: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000e00000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_11: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000000f00000002000d00140003000000010000002e30305c295f282a0e00050002");
+pub const EXT_087D_12: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001000000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566040000003b5f28405f292020");
+pub const EXT_087D_13: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001100000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566050000003b5f28405f292020");
+pub const EXT_087D_14: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001200000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566060000003b5f28405f292020");
+pub const EXT_087D_15: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001300000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566070000003b5f28405f292020");
+pub const EXT_087D_16: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001400000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566080000003b5f28405f292020");
+pub const EXT_087D_17: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001500000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566090000003b5f28405f292020");
+pub const EXT_087D_18: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001600000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c040000003b5f28405f292020");
+pub const EXT_087D_19: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001700000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c050000003b5f28405f292020");
+pub const EXT_087D_20: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001800000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c060000003b5f28405f292020");
+pub const EXT_087D_21: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001900000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c070000003b5f28405f292020");
+pub const EXT_087D_22: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001a00000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c080000003b5f28405f292020");
+pub const EXT_087D_23: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001b00000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c090000003b5f28405f292020");
+pub const EXT_087D_24: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001c00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233040000003b5f28405f292020");
+pub const EXT_087D_25: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001d00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233050000003b5f28405f292020");
+pub const EXT_087D_26: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001e00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233060000003b5f28405f292020");
+pub const EXT_087D_27: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001f00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233070000003b5f28405f292020");
+pub const EXT_087D_28: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002000000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233080000003b5f28405f292020");
+pub const EXT_087D_29: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002100000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233090000003b5f28405f292020");
+pub const EXT_087D_30: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002300000002000d00140003000000030000002e30305c295f282a0e00050001");
+pub const EXT_087D_31: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002400000003000d00140003000000030000002e30305c295f282a0e000500020800140003000000040000003b5f28405f292020");
+pub const EXT_087D_32: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002500000003000d00140003000000030000002e30305c295f282a0e00050002080014000300ff3f040000003b5f28405f292020");
+pub const EXT_087D_33: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002600000003000d00140003000000030000002e30305c295f282a0e000500020800140003003233040000003b5f28405f292020");
+pub const EXT_087D_34: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002700000002000d00140003000000030000002e30305c295f282a0e00050002");
+pub const EXT_087D_35: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002800000003000d001400020000009c0006ff2e30305c295f282a0e000500020400140002000000ffc7ceff3b5f28405f292020");
+pub const EXT_087D_36: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002900000003000d00140002000000006100ff2e30305c295f282a0e000500020400140002000000c6efceff3b5f28405f292020");
 pub const EXT_087D_37: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002a00000004000d00140003000000010000002e30305c295f282a0e000500020700140003000000040000003b5f28405f2920200800140003000000040000002020202020202020");
-pub const EXT_087D_38: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003700000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000040000003b5f28405f292020");
-pub const EXT_087D_39: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001000000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566040000003b5f28405f292020");
-pub const EXT_087D_40: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001600000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c040000003b5f28405f292020");
-pub const EXT_087D_41: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001c00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233040000003b5f28405f292020");
-pub const EXT_087D_42: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003800000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000050000003b5f28405f292020");
-pub const EXT_087D_43: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001100000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566050000003b5f28405f292020");
-pub const EXT_087D_44: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001700000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c050000003b5f28405f292020");
-pub const EXT_087D_45: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001d00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233050000003b5f28405f292020");
-pub const EXT_087D_46: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003900000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000060000003b5f28405f292020");
-pub const EXT_087D_47: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001200000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566060000003b5f28405f292020");
-pub const EXT_087D_48: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001800000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c060000003b5f28405f292020");
-pub const EXT_087D_49: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001e00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233060000003b5f28405f292020");
-pub const EXT_087D_50: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003a00000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000070000003b5f28405f292020");
-pub const EXT_087D_51: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001300000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566070000003b5f28405f292020");
-pub const EXT_087D_52: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001900000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c070000003b5f28405f292020");
-pub const EXT_087D_53: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001f00000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233070000003b5f28405f292020");
-pub const EXT_087D_54: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003b00000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000080000003b5f28405f292020");
-pub const EXT_087D_55: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001400000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566080000003b5f28405f292020");
-pub const EXT_087D_56: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001a00000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c080000003b5f28405f292020");
-pub const EXT_087D_57: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002000000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233080000003b5f28405f292020");
-pub const EXT_087D_58: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003c00000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000090000003b5f28405f292020");
-pub const EXT_087D_59: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001500000003000d00140003000000010000002e30305c295f282a0e000500020400140003006566090000003b5f28405f292020");
-pub const EXT_087D_60: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000001b00000003000d00140003000000010000002e30305c295f282a0e00050002040014000300cc4c090000003b5f28405f292020");
-pub const EXT_087D_61: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002100000003000d00140003000000010000002e30305c295f282a0e000500020400140003003233090000003b5f28405f292020");
+pub const EXT_087D_38: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002d00000007000d00140002000000fa7d00ff2e30305c295f282a0e000500020400140002000000f2f2f2ff3b5f28405f29202007001400020000007f7f7fff202020202020202008001400020000007f7f7fff202020202020202009001400020000007f7f7fff00000000000000000a001400020000007f7f7fff0000000000000000");
+pub const EXT_087D_39: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002e00000007000d00140003000000000000002e30305c295f282a0e000500020400140002000000a5a5a5ff3b5f28405f29202007001400020000003f3f3fff202020202020202008001400020000003f3f3fff202020202020202009001400020000003f3f3fff00000000000000000a001400020000003f3f3fff0000000000000000");
+pub const EXT_087D_40: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000002f00000002000d001400020000007f7f7fff2e30305c295f282a0e00050002");
+pub const EXT_087D_41: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003000000002000d00140002000000ff0000ff2e30305c295f282a0e00050002");
+pub const EXT_087D_42: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003100000003000d00140002000000fa7d00ff2e30305c295f282a0e000500020800140002000000ff8001ff3b5f28405f292020");
+pub const EXT_087D_43: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003400000003000d001400020000009c5700ff2e30305c295f282a0e000500020400140002000000ffeb9cff3b5f28405f292020");
+pub const EXT_087D_44: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003500000007000d001400020000003f3f3fff2e30305c295f282a0e000500020400140002000000f2f2f2ff3b5f28405f29202007001400020000003f3f3fff202020202020202008001400020000003f3f3fff202020202020202009001400020000003f3f3fff00000000000000000a001400020000003f3f3fff0000000000000000");
+pub const EXT_087D_45: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003600000007000d001400020000003f3f76ff2e30305c295f282a0e000500020400140002000000ffcc99ff3b5f28405f29202007001400020000007f7f7fff202020202020202008001400020000007f7f7fff202020202020202009001400020000007f7f7fff00000000000000000a001400020000007f7f7fff0000000000000000");
+pub const EXT_087D_46: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003700000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000040000003b5f28405f292020");
+pub const EXT_087D_47: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003800000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000050000003b5f28405f292020");
+pub const EXT_087D_48: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003900000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000060000003b5f28405f292020");
+pub const EXT_087D_49: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003a00000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000070000003b5f28405f292020");
+pub const EXT_087D_50: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003b00000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000080000003b5f28405f292020");
+pub const EXT_087D_51: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003c00000003000d00140003000000000000002e30305c295f282a0e000500020400140003000000090000003b5f28405f292020");
+pub const EXT_087D_52: HexBiffRecord = HexBiffRecord::new(0x087D, "7d080000000000000000000000003d00000005000400140002000000ffffccff2e30305c295f282a0700140002000000b2b2b2ff00090000003b5f280800140002000000b2b2b2ff007f7f7fff2020200900140002000000b2b2b2ff007f7f7fff2020200a00140002000000b2b2b2ff007f7f7fff000000");
 
 pub fn serialize_ext_087d() -> Vec<u8> {
     let mut buf = Vec::new();
@@ -368,15 +319,6 @@ pub fn serialize_ext_087d() -> Vec<u8> {
     buf.extend_from_slice(&EXT_087D_50.serialize());
     buf.extend_from_slice(&EXT_087D_51.serialize());
     buf.extend_from_slice(&EXT_087D_52.serialize());
-    buf.extend_from_slice(&EXT_087D_53.serialize());
-    buf.extend_from_slice(&EXT_087D_54.serialize());
-    buf.extend_from_slice(&EXT_087D_55.serialize());
-    buf.extend_from_slice(&EXT_087D_56.serialize());
-    buf.extend_from_slice(&EXT_087D_57.serialize());
-    buf.extend_from_slice(&EXT_087D_58.serialize());
-    buf.extend_from_slice(&EXT_087D_59.serialize());
-    buf.extend_from_slice(&EXT_087D_60.serialize());
-    buf.extend_from_slice(&EXT_087D_61.serialize());
     buf
 }
 
@@ -580,6 +522,106 @@ pub fn serialize_ext_0892() -> Vec<u8> {
     buf
 }
 
+/// 0293 与 0892 交替配对串行化（47 对）
+pub fn serialize_ext_0293_0892_interleaved() -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&EXT_0293_0.serialize());
+    buf.extend_from_slice(&EXT_0892_0.serialize());
+    buf.extend_from_slice(&EXT_0293_1.serialize());
+    buf.extend_from_slice(&EXT_0892_1.serialize());
+    buf.extend_from_slice(&EXT_0293_2.serialize());
+    buf.extend_from_slice(&EXT_0892_2.serialize());
+    buf.extend_from_slice(&EXT_0293_3.serialize());
+    buf.extend_from_slice(&EXT_0892_3.serialize());
+    buf.extend_from_slice(&EXT_0293_4.serialize());
+    buf.extend_from_slice(&EXT_0892_4.serialize());
+    buf.extend_from_slice(&EXT_0293_5.serialize());
+    buf.extend_from_slice(&EXT_0892_5.serialize());
+    buf.extend_from_slice(&EXT_0293_6.serialize());
+    buf.extend_from_slice(&EXT_0892_6.serialize());
+    buf.extend_from_slice(&EXT_0293_7.serialize());
+    buf.extend_from_slice(&EXT_0892_7.serialize());
+    buf.extend_from_slice(&EXT_0293_8.serialize());
+    buf.extend_from_slice(&EXT_0892_8.serialize());
+    buf.extend_from_slice(&EXT_0293_9.serialize());
+    buf.extend_from_slice(&EXT_0892_9.serialize());
+    buf.extend_from_slice(&EXT_0293_10.serialize());
+    buf.extend_from_slice(&EXT_0892_10.serialize());
+    buf.extend_from_slice(&EXT_0293_11.serialize());
+    buf.extend_from_slice(&EXT_0892_11.serialize());
+    buf.extend_from_slice(&EXT_0293_12.serialize());
+    buf.extend_from_slice(&EXT_0892_12.serialize());
+    buf.extend_from_slice(&EXT_0293_13.serialize());
+    buf.extend_from_slice(&EXT_0892_13.serialize());
+    buf.extend_from_slice(&EXT_0293_14.serialize());
+    buf.extend_from_slice(&EXT_0892_14.serialize());
+    buf.extend_from_slice(&EXT_0293_15.serialize());
+    buf.extend_from_slice(&EXT_0892_15.serialize());
+    buf.extend_from_slice(&EXT_0293_16.serialize());
+    buf.extend_from_slice(&EXT_0892_16.serialize());
+    buf.extend_from_slice(&EXT_0293_17.serialize());
+    buf.extend_from_slice(&EXT_0892_17.serialize());
+    buf.extend_from_slice(&EXT_0293_18.serialize());
+    buf.extend_from_slice(&EXT_0892_18.serialize());
+    buf.extend_from_slice(&EXT_0293_19.serialize());
+    buf.extend_from_slice(&EXT_0892_19.serialize());
+    buf.extend_from_slice(&EXT_0293_20.serialize());
+    buf.extend_from_slice(&EXT_0892_20.serialize());
+    buf.extend_from_slice(&EXT_0293_21.serialize());
+    buf.extend_from_slice(&EXT_0892_21.serialize());
+    buf.extend_from_slice(&EXT_0293_22.serialize());
+    buf.extend_from_slice(&EXT_0892_22.serialize());
+    buf.extend_from_slice(&EXT_0293_23.serialize());
+    buf.extend_from_slice(&EXT_0892_23.serialize());
+    buf.extend_from_slice(&EXT_0293_24.serialize());
+    buf.extend_from_slice(&EXT_0892_24.serialize());
+    buf.extend_from_slice(&EXT_0293_25.serialize());
+    buf.extend_from_slice(&EXT_0892_25.serialize());
+    buf.extend_from_slice(&EXT_0293_26.serialize());
+    buf.extend_from_slice(&EXT_0892_26.serialize());
+    buf.extend_from_slice(&EXT_0293_27.serialize());
+    buf.extend_from_slice(&EXT_0892_27.serialize());
+    buf.extend_from_slice(&EXT_0293_28.serialize());
+    buf.extend_from_slice(&EXT_0892_28.serialize());
+    buf.extend_from_slice(&EXT_0293_29.serialize());
+    buf.extend_from_slice(&EXT_0892_29.serialize());
+    buf.extend_from_slice(&EXT_0293_30.serialize());
+    buf.extend_from_slice(&EXT_0892_30.serialize());
+    buf.extend_from_slice(&EXT_0293_31.serialize());
+    buf.extend_from_slice(&EXT_0892_31.serialize());
+    buf.extend_from_slice(&EXT_0293_32.serialize());
+    buf.extend_from_slice(&EXT_0892_32.serialize());
+    buf.extend_from_slice(&EXT_0293_33.serialize());
+    buf.extend_from_slice(&EXT_0892_33.serialize());
+    buf.extend_from_slice(&EXT_0293_34.serialize());
+    buf.extend_from_slice(&EXT_0892_34.serialize());
+    buf.extend_from_slice(&EXT_0293_35.serialize());
+    buf.extend_from_slice(&EXT_0892_35.serialize());
+    buf.extend_from_slice(&EXT_0293_36.serialize());
+    buf.extend_from_slice(&EXT_0892_36.serialize());
+    buf.extend_from_slice(&EXT_0293_37.serialize());
+    buf.extend_from_slice(&EXT_0892_37.serialize());
+    buf.extend_from_slice(&EXT_0293_38.serialize());
+    buf.extend_from_slice(&EXT_0892_38.serialize());
+    buf.extend_from_slice(&EXT_0293_39.serialize());
+    buf.extend_from_slice(&EXT_0892_39.serialize());
+    buf.extend_from_slice(&EXT_0293_40.serialize());
+    buf.extend_from_slice(&EXT_0892_40.serialize());
+    buf.extend_from_slice(&EXT_0293_41.serialize());
+    buf.extend_from_slice(&EXT_0892_41.serialize());
+    buf.extend_from_slice(&EXT_0293_42.serialize());
+    buf.extend_from_slice(&EXT_0892_42.serialize());
+    buf.extend_from_slice(&EXT_0293_43.serialize());
+    buf.extend_from_slice(&EXT_0892_43.serialize());
+    buf.extend_from_slice(&EXT_0293_44.serialize());
+    buf.extend_from_slice(&EXT_0892_44.serialize());
+    buf.extend_from_slice(&EXT_0293_45.serialize());
+    buf.extend_from_slice(&EXT_0892_45.serialize());
+    buf.extend_from_slice(&EXT_0293_46.serialize());
+    buf.extend_from_slice(&EXT_0892_46.serialize());
+    buf
+}
+
 pub const EXT_088E_0: HexBiffRecord = HexBiffRecord::new(0x088E, "8e080000000000000000000090000000110011005400610062006c0065005300740079006c0065004d0065006400690075006d0032005000690076006f0074005300740079006c0065004c00690067006800740031003600");
 
 pub fn serialize_ext_088e() -> Vec<u8> {
@@ -620,7 +662,7 @@ pub fn serialize_ext_008c() -> Vec<u8> {
     buf
 }
 
-pub const EXT_01C1_0: HexBiffRecord = HexBiffRecord::new(0x01C1, "c101000025c30e00");
+pub const EXT_01C1_0: HexBiffRecord = HexBiffRecord::new(0x01C1, "c101000035ea0e00");
 
 pub fn serialize_ext_01c1() -> Vec<u8> {
     let mut buf = Vec::new();
@@ -660,19 +702,41 @@ pub fn serialize_ext_088c() -> Vec<u8> {
     buf
 }
 
-// ===== 批量串行化所有扩展记录 =====
-pub fn serialize_all_extensions() -> Vec<u8> {
+pub const EXT_00FF_0: HexBiffRecord = HexBiffRecord::new(0x00FF, "0800c82a00000c000000e12b000025010000");
+
+pub fn serialize_ext_00ff() -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&EXT_00FF_0.serialize());
+    buf
+}
+
+// ===== 批量串行化扩展记录（分段） =====
+
+/// Group A: 位于 BOUNDSHEET 之前
+pub fn serialize_ext_group_a() -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&serialize_ext_087c());
     buf.extend_from_slice(&serialize_ext_087d());
-    buf.extend_from_slice(&serialize_ext_0293());
-    buf.extend_from_slice(&serialize_ext_0892());
+    buf.extend_from_slice(&serialize_ext_0293_0892_interleaved());
     buf.extend_from_slice(&serialize_ext_088e());
     buf.extend_from_slice(&serialize_ext_0160());
+    buf
+}
+
+/// Group B: 位于 BOUNDSHEET 和 SST 之间
+pub fn serialize_ext_group_b() -> Vec<u8> {
+    let mut buf = Vec::new();
     buf.extend_from_slice(&serialize_ext_089a());
     buf.extend_from_slice(&serialize_ext_08a3());
     buf.extend_from_slice(&serialize_ext_008c());
     buf.extend_from_slice(&serialize_ext_01c1());
+    buf
+}
+
+/// Group C: 位于 SST 和 EOF 之间
+pub fn serialize_ext_group_c() -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&serialize_ext_00ff());
     buf.extend_from_slice(&serialize_ext_0863());
     buf.extend_from_slice(&serialize_ext_0896());
     buf.extend_from_slice(&serialize_ext_089b());

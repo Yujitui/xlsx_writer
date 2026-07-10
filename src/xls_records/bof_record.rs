@@ -70,12 +70,13 @@ impl BiffRecord for BoFRecord {
         let mut buf = Vec::with_capacity(16);
         buf.extend_from_slice(&0x0600u16.to_le_bytes()); // Version (BIFF8)
         buf.extend_from_slice(&(self.bof_type as u16).to_le_bytes()); // Type
-        buf.extend_from_slice(&0x0DBBu16.to_le_bytes()); // Build
-        buf.extend_from_slice(&0x07CCu16.to_le_bytes()); // Year
-        buf.extend_from_slice(&0x00u8.to_le_bytes()); // Flags low byte
-        buf.extend_from_slice(&0x06u8.to_le_bytes()); // Flags high byte (VerCanRead)
-        buf.extend_from_slice(&0x00000000u32.to_le_bytes()); // Reserved
-        buf.extend_from_slice(&0x0000u16.to_le_bytes()); // Reserved
+        buf.extend_from_slice(&0x4F5Au16.to_le_bytes()); // Build
+        buf.extend_from_slice(&0x07CDu16.to_le_bytes()); // Year (1997)
+        buf.push(0xD1); // bBlog (file history flags)
+        buf.push(0x06); // fHighest (highest BIFF version)
+        buf.extend_from_slice(&0x0002u16.to_le_bytes()); // bLowestYear
+        buf.extend_from_slice(&0x0806u16.to_le_bytes()); // reserved
+        buf.extend_from_slice(&0x0000u16.to_le_bytes()); // reserved
         buf
     }
 }

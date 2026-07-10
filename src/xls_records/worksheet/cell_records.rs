@@ -462,6 +462,9 @@ pub fn row_data_to_cell_records(
         let cell = &row_data[i];
 
         match cell {
+            Some(Cell::Text(s)) if s.is_empty() => {
+                i += 1;
+            }
             Some(Cell::Text(s)) => {
                 let sst_idx = sst.add(s.clone()) as u32;
                 result.extend_from_slice(
@@ -470,14 +473,11 @@ pub fn row_data_to_cell_records(
                 i += 1;
             }
             Some(Cell::Number(num)) => {
-                // 尝试找到连续的可 RK 编码数字
-                let mut rk_values: Vec<(u16, i32)> = Vec::new();
                 let mut j = i;
 
                 while j < n {
                     if let Some(Cell::Number(n)) = &row_data[j] {
-                        if let Some(rk_encoded) = encode_rk_value(*n) {
-                            rk_values.push((j as u16, rk_encoded));
+                        if encode_rk_value(*n).is_some() {
                             j += 1;
                         } else {
                             break;
@@ -490,7 +490,6 @@ pub fn row_data_to_cell_records(
                 let count = j - i;
 
                 if count == 1 {
-                    // 单个数字
                     if let Some(rk_encoded) = encode_rk_value(*num) {
                         result.extend_from_slice(
                             &RKRecord::new(row, col, xf_index, rk_encoded).serialize(),
@@ -501,9 +500,7 @@ pub fn row_data_to_cell_records(
                         );
                     }
                 } else if count > 1 {
-                    // 多个连续的可 RK 编码数字
                     let first_col = col;
-                    // 确保 j > 0 避免减法溢出
                     let last_col = if j > 0 { (j - 1) as u16 } else { col };
 
                     let mut rk_list: Vec<(u16, i32)> = Vec::new();
@@ -528,19 +525,7 @@ pub fn row_data_to_cell_records(
                 i += 1;
             }
             None => {
-                let mut j = i + 1;
-                while j < n && row_data[j].is_none() {
-                    j += 1;
-                }
-                let last_col = (j - 1) as u16;
-                if last_col == col {
-                    result.extend_from_slice(&BlankRecord::new(row, col, xf_index).serialize());
-                } else {
-                    result.extend_from_slice(
-                        &MulBlankRecord::new(row, col, last_col, xf_index).serialize(),
-                    );
-                }
-                i = j;
+                i += 1;
             }
         }
     }
@@ -712,7 +697,7 @@ mod tests {
         let mut sst = SharedStringTable::new();
         let result = row_data_to_cell_records(0, &row_data, 0x0F, &mut sst);
 
-        assert!(!result.is_empty());
+        assert!(result.is_empty());
     }
 }
 

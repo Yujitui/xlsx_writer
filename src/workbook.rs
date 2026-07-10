@@ -991,8 +991,14 @@ impl Workbook {
     /// * `Err(Box<dyn Error>)` - 保存失败（空工作簿或写入错误）
     fn save_as_xls(&self, path: &str) -> Result<(), Box<dyn Error>> {
         use cfb::CompoundFile;
+        use encoding_rs::GBK;
         use std::fs::File;
         use std::io::Write;
+        use std::time::SystemTime;
+        use crate::xls_records::{
+            build_document_summary_information_stream, build_summary_information_stream,
+            DocSummaryInfoProps, SummaryInfoProps,
+        };
 
         // 检查是否有工作表
         if self.sheets.is_empty() {
@@ -1005,10 +1011,59 @@ impl Workbook {
         // 写入 CFB 文件
         let file = File::create(path)?;
         let mut compound_file = CompoundFile::create_with_version(cfb::Version::V3, file)?;
+
+        // 1. Workbook 流
         let mut stream = compound_file.create_stream("Workbook")?;
         stream.write_all(&workbook_stream)?;
         stream.flush()?;
         drop(stream);
+
+        // 2. SummaryInformation 流
+        let summary_props = SummaryInfoProps {
+            codepage: 10008,
+            last_author: Vec::new(),
+            application_name: "Microsoft Macintosh Excel".to_string(),
+            security: 0,
+            last_saved_time: SystemTime::now(),
+        };
+        let summary_stream = build_summary_information_stream(&summary_props);
+        let mut stream = compound_file.create_stream("\x05SummaryInformation")?;
+        stream.write_all(&summary_stream)?;
+        stream.flush()?;
+        drop(stream);
+
+        // 3. DocumentSummaryInformation 流
+        // Excel Mac 中文版中这些字符串使用 GBK 编码存储
+        let sheet_count = self.sheets.len() as i32;
+        let titles_gbk: Vec<Vec<u8>> = self
+            .sheets
+            .iter()
+            .map(|sheet| {
+                let (encoded, _, _) = GBK.encode(&sheet.name);
+                encoded.into_owned()
+            })
+            .collect();
+        let heading_name_gbk = {
+            let (encoded, _, _) = GBK.encode("工作表");
+            encoded.into_owned()
+        };
+
+        let doc_summary_props = DocSummaryInfoProps {
+            codepage: 10008,
+            scale_crop: false,
+            heading_pairs: vec![(heading_name_gbk, sheet_count)],
+            titles_of_parts: titles_gbk,
+            links_dirty: false,
+            shared_doc: false,
+            hlinks_changed: false,
+            version: 1048576,
+        };
+        let doc_summary_stream = build_document_summary_information_stream(&doc_summary_props);
+        let mut stream = compound_file.create_stream("\x05DocumentSummaryInformation")?;
+        stream.write_all(&doc_summary_stream)?;
+        stream.flush()?;
+        drop(stream);
+
         drop(compound_file);
 
         Ok(())
@@ -1017,6 +1072,7 @@ impl Workbook {
     /// 生成 XLS 格式的 BIFF 数据
     fn generate_xls_biff_data(&self) -> Result<Vec<u8>, Box<dyn Error>> {
         use crate::xls_records::*;
+        use crate::xls_records::workbook::excel_defaults;
 
         // 第一步：创建共享字符串表
         let mut sst = SharedStringTable::new();
@@ -1054,7 +1110,9 @@ impl Workbook {
         // 第五步：计算 BOUNDSHEET 偏移和 INDEX 引用偏移
         let sst_data = SSTRecord::from(&sst).serialize();
         let eof_data = EofRecord::default().serialize();
-        let after_boundsheets_len = sst_data.len() + eof_data.len();
+        let ext_group_b = excel_defaults::serialize_ext_group_b();
+        let ext_group_c = excel_defaults::serialize_ext_group_c();
+        let after_boundsheets_len = ext_group_b.len() + sst_data.len() + ext_group_c.len() + eof_data.len();
 
         // 计算每个 sheet 在工作簿数据流中的起始偏移
         // 偏移 = header_len + boundsheets + sst + eof + 前面所有 sheet 数据的长度
@@ -1100,13 +1158,19 @@ impl Workbook {
             result.extend_from_slice(&boundsheet.serialize());
         }
 
-        // 第八步：写入 SST
+        // 第八步：写入 BIFF8 扩展记录 Group B（BOUNDSHEET 与 SST 之间）
+        result.extend_from_slice(&ext_group_b);
+
+        // 第九步：写入 SST
         result.extend_from_slice(&sst_data);
 
-        // 第九步：写入 EOF（Workbook Globals 子流结束）
+        // 第十步：写入 BIFF8 扩展记录 Group C（SST 与 EOF 之间）
+        result.extend_from_slice(&ext_group_c);
+
+        // 第十一步：写入 EOF（Workbook Globals 子流结束）
         result.extend_from_slice(&eof_data);
 
-        // 第十步：写入工作表数据（已修补的）
+        // 第十二步：写入工作表数据（已修补的）
         for (sheet_data, _) in sheet_results {
             result.extend_from_slice(&sheet_data);
         }
@@ -1132,13 +1196,16 @@ impl Workbook {
         result.extend_from_slice(&InterfaceEndRecord::default().serialize());
 
         // WriteAccess
-        result.extend_from_slice(&WriteAccessRecord::new("yujitui").serialize());
+        result.extend_from_slice(&WriteAccessRecord::new("xlsxwriter").serialize());
 
         // Codepage
         result.extend_from_slice(&CodepageRecord::new().serialize());
 
         // DSF
         result.extend_from_slice(&DSFRecord::default().serialize());
+
+        // 0x01C0
+        result.extend_from_slice(&Unknown01C0Record::new().serialize());
 
         // TabID
         result.extend_from_slice(&TabIDRecord::new(self.sheets.len() as u16).serialize());
@@ -1149,19 +1216,20 @@ impl Workbook {
         // Workbook Protection Block
         result.extend_from_slice(&WindowProtectRecord::default().serialize());
         result.extend_from_slice(&ProtectRecord::default().serialize());
-        result.extend_from_slice(&ObjectProtectRecord::default().serialize());
         result.extend_from_slice(&PasswordRecord::default().serialize());
         result.extend_from_slice(&Prot4RevRecord::default().serialize());
         result.extend_from_slice(&Prot4RevPassRecord::default().serialize());
+
+        // Window1
+        result.extend_from_slice(&Window1Record::new(
+            0x01E0, 0x0294, 0x3FD4, 0x2A58, 0x0038, 0, 0, 1, 0x0258,
+        ).serialize());
 
         // Backup
         result.extend_from_slice(&BackupRecord::default().serialize());
 
         // HideObj
         result.extend_from_slice(&HideObjRecord::default().serialize());
-
-        // Window1
-        result.extend_from_slice(&Window1Record::default().serialize());
 
         // DateMode
         result.extend_from_slice(&DateModeRecord::default().serialize());
@@ -1184,9 +1252,9 @@ impl Workbook {
         // XF records (62 records from Excel reference)
         result.extend_from_slice(&self.write_xls_default_xf_records());
 
-        // BIFF8 扩展记录（样式定义、主题等）
+        // BIFF8 扩展记录 Group A（BOUNDSHEET 之前）
         use crate::xls_records::workbook::excel_defaults;
-        result.extend_from_slice(&excel_defaults::serialize_all_extensions());
+        result.extend_from_slice(&excel_defaults::serialize_ext_group_a());
 
         result
     }

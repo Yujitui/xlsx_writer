@@ -14,12 +14,12 @@
 /// - ASCII字符串：长度(1字节) + 标志(0x00) + 字节数据
 /// - Unicode字符串：字符数(1字节) + 标志(0x01) + UTF-16LE数据
 pub fn encode_biff_string_v1(s: &str) -> Vec<u8> {
-    if s.is_ascii() {
-        let bytes = s.as_bytes();
-        let mut result = Vec::with_capacity(2 + bytes.len());
-        result.push(bytes.len() as u8);
+    if s.chars().all(|c| c <= '\u{00FF}') {
+        let latin1: Vec<u8> = s.chars().map(|c| c as u8).collect();
+        let mut result = Vec::with_capacity(2 + latin1.len());
+        result.push(latin1.len() as u8);
         result.push(0x00); // flag = compressed ASCII
-        result.extend_from_slice(bytes);
+        result.extend_from_slice(&latin1);
         result
     } else {
         let utf16: Vec<u8> = s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
@@ -48,13 +48,13 @@ pub fn encode_biff_string_v1(s: &str) -> Vec<u8> {
 /// - ASCII字符串：长度(2字节) + 标志(0x00) + 字节数据
 /// - Unicode字符串：字符数(2字节) + 标志(0x01) + UTF-16LE数据
 pub fn encode_biff_string_v2(s: &str) -> Vec<u8> {
-    if s.is_ascii() {
-        let bytes = s.as_bytes();
-        let char_count = bytes.len() as u16;
-        let mut result = Vec::with_capacity(3 + bytes.len());
+    if s.chars().all(|c| c <= '\u{00FF}') {
+        let latin1: Vec<u8> = s.chars().map(|c| c as u8).collect();
+        let char_count = latin1.len() as u16;
+        let mut result = Vec::with_capacity(3 + latin1.len());
         result.extend_from_slice(&char_count.to_le_bytes());
         result.push(0x00); // flag = compressed ASCII
-        result.extend_from_slice(bytes);
+        result.extend_from_slice(&latin1);
         result
     } else {
         let utf16: Vec<u8> = s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();

@@ -314,13 +314,13 @@ impl Default for SharedStringTable {
 fn encode_sst_string(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
 
-    if s.is_ascii() {
-        let bytes = s.as_bytes();
+    if s.chars().all(|c| c <= '\u{00FF}') {
+        let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
         let char_count = bytes.len() as u16;
         result.extend_from_slice(&char_count.to_le_bytes());
         result.push(0x04); // bit 2 = Asian phonetic extension present
         result.extend_from_slice(&16u32.to_le_bytes()); // cbExtRst
-        result.extend_from_slice(bytes);
+        result.extend_from_slice(&bytes);
     } else {
         let utf16: Vec<u8> = s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
         let char_count = (utf16.len() / 2) as u16;
@@ -332,7 +332,7 @@ fn encode_sst_string(s: &str) -> Vec<u8> {
 
     // 16 bytes Asian phonetic extension data（与参考文件一致）
     result.extend_from_slice(&[
-        0x01, 0x00, 0x0c, 0x00, 0x16, 0x00, 0x37, 0x00,
+        0x01, 0x00, 0x0c, 0x00, 0x06, 0x00, 0x37, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ]);
 
@@ -532,7 +532,7 @@ mod tests {
 
         assert_eq!(idx1, 0);
         assert_eq!(idx2, 1);
-        assert_eq!(idx3, 0); // 返回已存在字符串的索引
+        assert_eq!(idx3, 0);
         assert_eq!(table.string_count(), 2);
         assert_eq!(table.total_reference_count(), 3);
     }
@@ -545,9 +545,8 @@ mod tests {
         let record = SSTRecord::from(&table);
         let data = record.data();
 
-        // Check header
-        assert_eq!(&data[0..4], &2u32.to_le_bytes()); // total_refs
-        assert_eq!(&data[4..8], &2u32.to_le_bytes()); // unique_count
+        assert_eq!(&data[0..4], &2u32.to_le_bytes());
+        assert_eq!(&data[4..8], &2u32.to_le_bytes());
     }
 
     #[test]
@@ -557,7 +556,6 @@ mod tests {
         let record = SSTRecord::from(&table);
         let serialized = record.serialize();
 
-        // SST ID
         assert_eq!(&serialized[0..2], &SST_RECORD_ID.to_le_bytes());
     }
 
@@ -568,12 +566,10 @@ mod tests {
         let record = SSTRecord::from(&table);
         let data = record.data();
 
-        // Check header
         assert_eq!(&data[0..4], &1u32.to_le_bytes());
         assert_eq!(&data[4..8], &1u32.to_le_bytes());
     }
 
-    /// 单元测试：验证 SST 记录编码与 Excel 2026 参考文件 `工作簿1.xls` 一致。
     #[test]
     fn test_sst_record_data_matches_excel_reference() {
         let mut table = SharedStringTable::new();
@@ -583,20 +579,17 @@ mod tests {
         let data = record.data();
 
         let expected = vec![
-            // cTotl = 2, cUnique = 2
             0x02, 0x00, 0x00, 0x00,
             0x02, 0x00, 0x00, 0x00,
-            // "aaa": cch=3, flag=0x04, cbExtRst=16, chars, extData
             0x03, 0x00, 0x04,
             0x10, 0x00, 0x00, 0x00,
             0x61, 0x61, 0x61,
-            0x01, 0x00, 0x0c, 0x00, 0x16, 0x00, 0x37, 0x00,
+            0x01, 0x00, 0x0c, 0x00, 0x06, 0x00, 0x37, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            // "bbb": cch=3, flag=0x04, cbExtRst=16, chars, extData
             0x03, 0x00, 0x04,
             0x10, 0x00, 0x00, 0x00,
             0x62, 0x62, 0x62,
-            0x01, 0x00, 0x0c, 0x00, 0x16, 0x00, 0x37, 0x00,
+            0x01, 0x00, 0x0c, 0x00, 0x06, 0x00, 0x37, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
         assert_eq!(data, expected, "SST 数据与 Excel 参考不匹配");
@@ -605,13 +598,339 @@ mod tests {
     #[test]
     fn test_sst_string_unicode_has_extension() {
         let encoded = encode_sst_string("测试");
-        // cch=2, flag=0x05 (unicode + extension), cbExtRst=16
         assert_eq!(&encoded[0..2], &2u16.to_le_bytes());
         assert_eq!(encoded[2], 0x05);
         assert_eq!(&encoded[3..7], &16u32.to_le_bytes());
-        // 2 UTF-16 code units = 4 bytes
         assert_eq!(&encoded[7..11], &[0x4B, 0x6D, 0xD5, 0x8B]);
-        // followed by 16-byte extension
         assert_eq!(encoded.len(), 11 + 16);
+    }
+
+    // ========================================================================
+    // 长度一致性验证: encode_sst_string 各部分之和等于总长度
+    // ========================================================================
+
+    /// 验证单个字符串编码后的长度正确性
+    fn verify_encoded_string_length(s: &str) {
+        let encoded = encode_sst_string(s);
+        // 结构: cch(2) + flag(1) + cbExtRst(4) + chars(N or 2*N) + extData(16)
+        let expected_body = if s.chars().all(|c| c <= '\u{00FF}') {
+            s.len()
+        } else {
+            s.encode_utf16().count() * 2
+        };
+        let expected_total = 2 + 1 + 4 + expected_body + 16;
+        assert_eq!(
+            encoded.len(),
+            expected_total,
+            "encode_sst_string({:?}) length mismatch: expected {} + {}, got {}",
+            s, expected_body, 23, encoded.len()
+        );
+    }
+
+    #[test]
+    fn test_encode_sst_string_length_ascii() {
+        for s in &["", "a", "abc", "hello world", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] {
+            verify_encoded_string_length(s);
+        }
+    }
+
+    #[test]
+    fn test_encode_sst_string_length_unicode() {
+        for s in &["测", "测试", "中文", "日本語", "中文English混合", "🌍"] {
+            verify_encoded_string_length(s);
+        }
+    }
+
+    #[test]
+    fn test_encode_sst_string_length_mixed() {
+        // 混合 ASCII + Unicode
+        let tests = vec![
+            "Hello测试",
+            "abc中文def",
+            "123测试456",
+            "a",
+            "测",
+            "",
+        ];
+        for s in &tests {
+            verify_encoded_string_length(s);
+        }
+    }
+
+    /// 验证 SST 记录的 data() 总长度 = 8 + sum(每个字符串的编码长度)
+    #[test]
+    fn test_sst_data_total_length() {
+        let strings = vec![
+            "Hello", "World", "测试", "中文SST", "abc123", "ABC",
+        ];
+        let mut table = SharedStringTable::new();
+        for s in &strings {
+            table.add(s.to_string());
+        }
+        let record = SSTRecord::from(&table);
+        let data = record.data();
+
+        // 计算预期长度: 8(header) + sum(encode_sst_string)
+        let expected_encoded_len: usize = strings.iter().map(|s| encode_sst_string(s).len()).sum();
+        let expected_total = 8 + expected_encoded_len;
+
+        assert_eq!(
+            data.len(),
+            expected_total,
+            "SST data() total length mismatch: expected {} (8 header + {} strings), got {}",
+            expected_total, expected_encoded_len, data.len()
+        );
+    }
+
+    // ========================================================================
+    // 序列化一致性验证: serialize() 的 ID + length + data 自洽
+    // ========================================================================
+
+    #[test]
+    fn test_sst_serialize_self_consistent() {
+        let strings = vec!["Hello", "World", "测试", "中文SST"];
+        let mut table = SharedStringTable::new();
+        for s in &strings {
+            table.add(s.to_string());
+        }
+        let record = SSTRecord::from(&table);
+        let serialized = record.serialize();
+
+        let declared_len = u16::from_le_bytes([serialized[2], serialized[3]]);
+        let actual_data_len = serialized.len() - 4;
+
+        // 诊断：对比 encode_all_strings 和 data()
+        let encoded = record.encode_all_strings();
+        let data = record.data();
+        eprintln!(
+            "DEBUG: serialized.len={}, declared_len={}, actual_data_len={}, data.len()={}, encoded.len()={}, 8+encoded={}",
+            serialized.len(), declared_len, actual_data_len, data.len(), encoded.len(), 8 + encoded.len()
+        );
+
+        // 检查 data() = 8 + encode_all_strings() 是否成立
+        assert_eq!(
+            data.len(),
+            8 + encoded.len(),
+            "data() length mismatch: data()={} != 8+encode_all()={}",
+            data.len(),
+            8 + encoded.len()
+        );
+
+        assert_eq!(
+            declared_len as usize,
+            actual_data_len,
+            "SST serialized length mismatch: declared {} vs actual data {} (data()={}, encoded={})",
+            declared_len, actual_data_len, data.len(), encoded.len()
+        );
+    }
+
+    // ========================================================================
+    // 编码-解析 往返测试（Round-Trip）
+    // ========================================================================
+
+    /// 手动解析单条 encode_sst_string 编码的字符串
+    fn roundtrip_one_encoded(encoded: &[u8], original: &str) {
+        let cch = u16::from_le_bytes([encoded[0], encoded[1]]) as usize;
+        let flag = encoded[2];
+        let has_unicode = (flag & 0x01) != 0;
+        let has_ext = (flag & 0x04) != 0;
+
+        assert!(
+            has_ext,
+            "flag 必须包含 extension bit (0x04): got 0x{:02X}",
+            flag
+        );
+
+        let ext_size = if has_ext {
+            u32::from_le_bytes([encoded[3], encoded[4], encoded[5], encoded[6]]) as usize
+        } else {
+            0
+        };
+
+        let char_bytes = if has_unicode { cch * 2 } else { cch };
+        let string_start = 3 + 4; // flag + cbExtRst
+        let string_end = string_start + char_bytes;
+
+        let decoded = if has_unicode {
+            let u16_vec: Vec<u16> = encoded[string_start..string_end]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            String::from_utf16(&u16_vec).unwrap()
+        } else {
+            String::from_utf8_lossy(&encoded[string_start..string_end]).to_string()
+        };
+
+        assert_eq!(
+            decoded, original,
+            "Round-trip mismatch for {:?}", original
+        );
+
+        // 验证 extension 数据长度
+        let ext_start = string_end;
+        let ext_end = ext_start + ext_size;
+        assert!(
+            ext_end <= encoded.len(),
+            "Extension data overflows: ext_start={} ext_size={} encoded_len={}",
+            ext_start,
+            ext_size,
+            encoded.len()
+        );
+    }
+
+    #[test]
+    fn test_sst_string_roundtrip_ascii() {
+        for s in &["", "a", "abc", "hello world"] {
+            let encoded = encode_sst_string(s);
+            roundtrip_one_encoded(&encoded, s);
+        }
+    }
+
+    #[test]
+    fn test_sst_string_roundtrip_unicode() {
+        for s in &["测", "测试", "中文", "日本語", "中文English混合"] {
+            let encoded = encode_sst_string(s);
+            roundtrip_one_encoded(&encoded, s);
+        }
+    }
+
+    // ========================================================================
+    // CONTINUE 分片测试：大量唯一字符串触发分片
+    // ========================================================================
+
+    /// 构建足够大的 SST 触发 CONTINUE 记录，验证 serialize() 完整性
+    #[test]
+    fn test_sst_continue_split_integrity() {
+        let mut table = SharedStringTable::new();
+        // 每个 ASCII 字符串编码后固定 23+N = ~28-30 字节
+        // 需要超过 MAX_RECORD_DATA_SIZE (8224) 的数据
+        // 8224 / ~30 ≈ 274 个字符串即可触发 CONTINUE
+        for i in 0..300 {
+            table.add(format!("unique_string_{:04}", i));
+        }
+
+        let record = SSTRecord::from(&table);
+        let serialized = record.serialize();
+
+        // 验证第一个记录是 SST (0x00FC)
+        assert_eq!(
+            u16::from_le_bytes([serialized[0], serialized[1]]),
+            SST_RECORD_ID
+        );
+
+        // 扫描所有记录验证格式完整性
+        let mut offset = 0;
+        let mut record_count = 0;
+        let mut total_declared_data = 0usize;
+
+        while offset < serialized.len() {
+            if offset + 4 > serialized.len() {
+                break;
+            }
+            let id = u16::from_le_bytes([serialized[offset], serialized[offset + 1]]);
+            let len = u16::from_le_bytes([serialized[offset + 2], serialized[offset + 3]]) as usize;
+            let total_record_size = 4 + len;
+
+            // 验证记录不越界
+            assert!(
+                offset + total_record_size <= serialized.len(),
+                "Record {} overflows buffer: offset={}, declared_len={}, buf_len={}",
+                record_count,
+                offset,
+                len,
+                serialized.len()
+            );
+
+            // 验证 ID 有效
+            assert!(
+                id == SST_RECORD_ID || id == CONTINUE_RECORD_ID,
+                "Invalid record ID at offset {}: 0x{:04X}",
+                offset,
+                id
+            );
+
+            // 第一条必须是 SST
+            if record_count == 0 {
+                assert_eq!(id, SST_RECORD_ID, "First record must be SST");
+            }
+
+            total_declared_data += len;
+            offset += total_record_size;
+            record_count += 1;
+        }
+
+        assert!(
+            record_count > 1,
+            "Should have CONTINUE records (>1 record), got {}",
+            record_count
+        );
+        // 验证总数据长度一致
+        assert_eq!(offset, serialized.len(), "Record chain length mismatch");
+    }
+
+    // ========================================================================
+    // 多区域实际场景模拟：验证 SST 跨 region 的字符串索引正确
+    // ========================================================================
+
+    #[test]
+    fn test_sst_multi_region_strings() {
+        let mut sst = SharedStringTable::new();
+
+        // 模拟多区域中的字符串收集过程
+        let region1_strings = ["姓名", "年龄", "张三", "28"];
+        let region2_strings = ["产品", "销售额", "笔记本电脑", "9999"];
+
+        let mut all_indices = Vec::new();
+        for s in region1_strings.iter().chain(region2_strings.iter()) {
+            let idx = sst.add(s.to_string());
+            all_indices.push(idx);
+        }
+
+        // 验证总引用数和独立字符串数
+        assert_eq!(sst.total_reference_count(), 8);
+        assert_eq!(sst.unique_count(), 8);
+
+        // 验证 SST 序列化后能正确编码所有字符串
+        let record = SSTRecord::from(&sst);
+        let data = record.data();
+        let encoded_strs = &data[8..]; // 跳过 8 字节 header
+
+        // 手动解析每条字符串，验证与原始一致
+        let mut offset = 0;
+        let all_originals: Vec<&str> = region1_strings
+            .iter()
+            .chain(region2_strings.iter())
+            .copied()
+            .collect();
+
+        for (i, original) in all_originals.iter().enumerate() {
+            // 每条字符串长度由 encode_sst_string 决定
+            let one_encoded = encode_sst_string(original);
+            let expected_len = one_encoded.len();
+
+            assert!(
+                offset + expected_len <= encoded_strs.len(),
+                "String {} overflows: offset={}, len={}, buf={}",
+                i,
+                offset,
+                expected_len,
+                encoded_strs.len()
+            );
+
+            let slice = &encoded_strs[offset..offset + expected_len];
+            assert_eq!(
+                slice, &one_encoded[..],
+                "String {} ({:?}) encoding mismatch at offset {}",
+                i, original, offset
+            );
+
+            offset += expected_len;
+        }
+
+        assert_eq!(
+            offset, encoded_strs.len(),
+            "Total encoded strings length mismatch: consumed {} of {}",
+            offset, encoded_strs.len()
+        );
     }
 }

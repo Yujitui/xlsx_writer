@@ -25,27 +25,30 @@ pub struct RowRecord {
     last_col: u16,
     height_options: u16,
     options: u32,
+    is_empty: bool,
 }
 
 impl RowRecord {
     pub fn from_row_data(row_index: usize, row_data: &Vec<Option<Cell>>) -> Self {
-        let first_col = row_data.iter().position(|c| c.is_some()).unwrap_or(0) as u16;
-
-        let last_col = row_data
-            .iter()
-            .rposition(|c| c.is_some())
-            .map(|p| p + 1)
-            .unwrap_or(0) as u16;
+        let has_data = |c: &Option<Cell>| -> bool {
+            match c {
+                Some(Cell::Text(s)) => !s.is_empty(),
+                Some(Cell::Number(_)) | Some(Cell::Boolean(_)) => true,
+                None => false,
+            }
+        };
 
         let height_options = 0x0140;
         let options = 0x000F0100;
+        let is_empty = !row_data.iter().any(has_data);
 
         RowRecord {
             index: row_index as u16,
-            first_col,
-            last_col,
+            first_col: 0,
+            last_col: row_data.len() as u16,
             height_options,
             options,
+            is_empty,
         }
     }
 }
@@ -68,7 +71,7 @@ impl BiffRecord for RowRecord {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        if self.first_col == 0 && self.last_col == 0 {
+        if self.is_empty {
             vec![]
         } else {
             // Manual serialization to avoid infinite recursion
@@ -171,6 +174,7 @@ impl ParsableRecord for RowRecord {
             last_col,
             height_options,
             options,
+            is_empty: false,
         })
     }
 

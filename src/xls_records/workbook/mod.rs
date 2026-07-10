@@ -27,6 +27,7 @@ pub mod refresh_all_record;
 pub mod sst_record;
 pub mod style_record;
 pub mod tab_id_record;
+pub mod unknown_01c0_record;
 pub mod use_selfs_record;
 pub mod window1_record;
 pub mod window_protect_record;

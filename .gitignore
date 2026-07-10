@@ -3,3 +3,6 @@
 /AI.md
 /AI.txt
 /.DS_Store
+src/.DS_Store
+.idea/*.iml
+src/bin/

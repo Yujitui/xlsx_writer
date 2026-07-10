@@ -14,7 +14,7 @@ use crate::xls_records::{
     DimensionsRecord, EofRecord, GridSetRecord, GutsRecord, HCenterRecord,
     IndexRecord, IterationRecord, LeftMarginRecord, PrintGridLinesRecord,
     PrintHeadersRecord, RefModeRecord, RightMarginRecord, RowRecord,
-    SetupPageRecord, SharedStringTable, TopMarginRecord, VCenterRecord, WSBoolRecord, Window2Record,
+    SharedStringTable, TopMarginRecord, VCenterRecord, WSBoolRecord, Window2Record,
 };
 use polars::prelude::DataFrame;
 use std::collections::{HashSet};
@@ -274,7 +274,10 @@ impl WorkSheet {
         // =====================================================================
         struct BlockPreData {
             rows_data: Vec<(Vec<u8>, Vec<u8>)>,
+            all_row_bytes: Vec<u8>,
+            all_cell_bytes: Vec<u8>,
             row_sizes: Vec<u32>,
+            cell_sizes: Vec<u32>,
             total_rows_size: u32,
             num_non_empty_rows: u32,
             first_cell_offsets: Vec<u16>,
@@ -286,24 +289,40 @@ impl WorkSheet {
         for block in &blocks {
             let mut bp = BlockPreData {
                 rows_data: Vec::new(),
+                all_row_bytes: Vec::new(),
+                all_cell_bytes: Vec::new(),
                 row_sizes: Vec::new(),
+                cell_sizes: Vec::new(),
                 total_rows_size: 0,
                 num_non_empty_rows: 0,
                 first_cell_offsets: Vec::new(),
                 db_rtrw: 0,
             };
 
+            let mut cumulative_cell_offset: u16 = 0;
+
             for item in &block.rows {
                 let row_rec = RowRecord::from_row_data(item.abs_row as usize, &item.row_data);
                 let row_bytes = row_rec.serialize();
                 let cell_bytes =
-                    row_data_to_cell_records(item.abs_row as usize, &item.row_data, 0, sst);
-                let row_total = (row_bytes.len() + cell_bytes.len()) as u32;
+                    row_data_to_cell_records(item.abs_row as usize, &item.row_data, 0x0F, sst);
 
-                bp.total_rows_size += row_total;
-                bp.row_sizes.push(row_total);
+                let row_len = row_bytes.len() as u32;
+                let cell_len = cell_bytes.len() as u32;
+
+                bp.all_row_bytes.extend_from_slice(&row_bytes);
+                bp.all_cell_bytes.extend_from_slice(&cell_bytes);
+
+                bp.row_sizes.push(row_len);
+                bp.cell_sizes.push(cell_len);
+                bp.total_rows_size += row_len + cell_len;
                 bp.rows_data.push((row_bytes, cell_bytes));
                 bp.num_non_empty_rows += 1;
+
+                let cell_offset_start = cumulative_cell_offset;
+                // 在 ROWs → CELL 布局中，rgdb 从第一组 cell 数据开始累计
+                bp.first_cell_offsets.push(cell_offset_start);
+                cumulative_cell_offset += cell_len as u16;
             }
 
             block_data.push(bp);
@@ -321,24 +340,27 @@ impl WorkSheet {
         // [4] RefMode (0x000F)
         // [5] Iteration (0x0011)
         // [6] Delta (0x0010)
-        // [7] SaveRecalc (0x005F) ← 新增
+        // [7] SaveRecalc (0x005F)
         // [8] PrintHeaders (0x002A)
         // [9] PrintGridLines (0x002B)
         // [10] GridSet (0x0082)
         // [11] Guts (0x0080)
         // [12] DefaultRowHeight (0x0225)
         // [13] WSBool (0x0081)
-        // [14] HCenter (0x0083)
-        // [15] VCenter (0x0084)
-        // [16] LeftMargin (0x0026)
-        // [17] RightMargin (0x0027)
-        // [18] TopMargin (0x0028)
-        // [19] BottomMargin (0x0029)
-        // [20] SetupPage (0x00A1)
-        // [21] Ext 0x089C (BIFF8 extension) ← 新增
-        // [22] DefColWidth (0x0055) ← defcolwidth_pos (ibXF)
-        // [23] Dimensions (0x0200)
-        // [24+] RowBlocks (ROW + CELL per row + DBCELL per block)
+        // [14] Selection (0x0014, empty)
+        // [15] 0x0015 (empty)
+        // [16] HCenter (0x0083)
+        // [17] VCenter (0x0084)
+        // [18] LeftMargin (0x0026)
+        // [19] RightMargin (0x0027)
+        // [20] TopMargin (0x0028)
+        // [21] BottomMargin (0x0029)
+        // [22] 0x004D (30B)
+        // [23] SetupPage (0x00A1, 34B)
+        // [24] Ext 0x089C (38B)
+        // [25] DefColWidth (0x0055) ← defcolwidth_pos (ibXF)
+        // [26] Dimensions (0x0200)
+        // [27+] ROW (all rows first) + CELL (all cell data) + DBCELL per block
         // [Window2 (0x023E)]
         // [Ext 0x088B (16B)]
         // [Ext 0x001D (15B)]
@@ -359,14 +381,17 @@ impl WorkSheet {
         let guts = GutsRecord::default().serialize();
         let def_row_height = DefaultRowHeightRecord::default().serialize();
         let wsbool = WSBoolRecord::default().serialize();
+        let sel_0014 = HexBiffRecord::new(0x0014, "").serialize();
+        let sel_0015 = HexBiffRecord::new(0x0015, "").serialize();
         let hcenter = HCenterRecord::default().serialize();
         let vcenter = VCenterRecord::default().serialize();
         let left_margin = LeftMarginRecord::default().serialize();
         let right_margin = RightMarginRecord::default().serialize();
         let top_margin = TopMarginRecord::default().serialize();
         let bottom_margin = BottomMarginRecord::default().serialize();
-        let setup_page = SetupPageRecord::default().serialize();
-        let ext_089c = HexBiffRecord::new(0x089C, "9c0800000000000000000000000000000000000000000000000000003c330000000000000000").serialize();
+        let rec_004d = HexBiffRecord::new(0x004D, "03200100000000000000640000002c010000000000009999ffff01000000").serialize();
+        let setup_page = HexBiffRecord::new(0x00A1, "0900640001000100010083002c0100002c0100009a9999999999b93f9a9999999999").serialize();
+        let ext_089c = HexBiffRecord::new(0x089C, "9c0800000000000000000000000000000000000000000000000000009c990000000000000000").serialize();
         let defcolwidth = DefColWidthRecord::default().serialize();
 
         let total_rows = self.total_row_count();
@@ -379,9 +404,9 @@ impl WorkSheet {
         let dims = dimensions.serialize();
 
         let window2 = Window2Record::default().serialize();
-        let ext_088b = HexBiffRecord::new(0x088B, "8b080000000000000000000000000a00").serialize();
+        let ext_088b = HexBiffRecord::new(0x088B, "8b080000000000000000000000000200").serialize();
         let ext_001d = HexBiffRecord::new(0x001D, "030800070000000100080008000707").serialize();
-        let ext_00ef = HexBiffRecord::new(0x00EF, "160037000000").serialize();
+        let ext_00ef = HexBiffRecord::new(0x00EF, "060037000000").serialize();
         let ext_0867 = HexBiffRecord::new(0x0867, "670800000000000000000000020001ffffffff03440000").serialize();
         let eof = EofRecord::default().serialize();
 
@@ -410,12 +435,15 @@ impl WorkSheet {
         pos += guts.len() as u32;
         pos += def_row_height.len() as u32;
         pos += wsbool.len() as u32;
+        pos += sel_0014.len() as u32;
+        pos += sel_0015.len() as u32;
         pos += hcenter.len() as u32;
         pos += vcenter.len() as u32;
         pos += left_margin.len() as u32;
         pos += right_margin.len() as u32;
         pos += top_margin.len() as u32;
         pos += bottom_margin.len() as u32;
+        pos += rec_004d.len() as u32;
         pos += setup_page.len() as u32;
         pos += ext_089c.len() as u32;
 
@@ -432,21 +460,25 @@ impl WorkSheet {
         for (_i, bp) in block_data.iter_mut().enumerate() {
             let block_start = pos;
 
-            let mut rgdb: Vec<u16> = Vec::with_capacity(bp.rows_data.len());
-            for j in 0..bp.rows_data.len() {
-                if j == 0 {
-                    rgdb.push(0);
-                } else {
-                    let prev_cell_len = bp.rows_data[j - 1].1.len() as u16;
-                    let cur_row_len = bp.rows_data[j].0.len() as u16;
-                    rgdb.push(prev_cell_len + cur_row_len);
-                }
-            }
+            let row_chunk: u32 = bp.row_sizes.iter().sum();
+            let cell_chunk: u32 = bp.cell_sizes.iter().sum();
 
-            let block_end = pos + bp.total_rows_size;
+            // 在 ROWs → CELL 布局中:
+            // block_start 指向第一行 ROW 记录
+            // 所有 ROW 记录之后紧接着所有 CELL 数据
+            // DBCELL 在 CELL 数据之后
+            let block_end = pos + row_chunk + cell_chunk;
             let dbcell_pos = block_end;
 
             let db_rtrw = block_start.wrapping_sub(dbcell_pos);
+
+            // rgdb: 相对于 block 起始位置的 CELL 数据偏移
+            let mut rgdb: Vec<u16> = Vec::with_capacity(bp.rows_data.len());
+            let mut cell_offset: u16 = 0;
+            for j in 0..bp.rows_data.len() {
+                rgdb.push(cell_offset);
+                cell_offset += bp.cell_sizes[j] as u16;
+            }
 
             bp.db_rtrw = db_rtrw;
             bp.first_cell_offsets = rgdb;
@@ -490,22 +522,24 @@ impl WorkSheet {
         result.extend_from_slice(&guts);
         result.extend_from_slice(&def_row_height);
         result.extend_from_slice(&wsbool);
+        result.extend_from_slice(&sel_0014);
+        result.extend_from_slice(&sel_0015);
         result.extend_from_slice(&hcenter);
         result.extend_from_slice(&vcenter);
         result.extend_from_slice(&left_margin);
         result.extend_from_slice(&right_margin);
         result.extend_from_slice(&top_margin);
         result.extend_from_slice(&bottom_margin);
+        result.extend_from_slice(&rec_004d);
         result.extend_from_slice(&setup_page);
         result.extend_from_slice(&ext_089c);
         result.extend_from_slice(&defcolwidth);
         result.extend_from_slice(&dims);
 
+        // 按 Row Block 写入：每个块内 ROW → CELL → DBCELL
         for bp in &block_data {
-            for (ref row_bytes, ref cell_bytes) in &bp.rows_data {
-                result.extend_from_slice(row_bytes);
-                result.extend_from_slice(cell_bytes);
-            }
+            result.extend_from_slice(&bp.all_row_bytes);
+            result.extend_from_slice(&bp.all_cell_bytes);
             let dbcell = DBCellRecord::new(bp.db_rtrw, bp.first_cell_offsets.clone());
             result.extend_from_slice(&dbcell.serialize());
         }

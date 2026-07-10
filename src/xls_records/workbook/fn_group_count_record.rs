@@ -9,7 +9,7 @@ use super::BiffRecord;
 ///
 /// ## 参数说明
 ///
-/// - 固定值：0x000E (14个函数组)
+/// - 固定值：0x0011 (17个函数组)
 #[derive(Debug, Default)]
 pub struct FnGroupCountRecord;
 
@@ -25,7 +25,7 @@ impl BiffRecord for FnGroupCountRecord {
     }
 
     fn data(&self) -> Vec<u8> {
-        vec![0x0E, 0x00] // Hard-coded 0x000E (14 function groups)
+        vec![0x11, 0x00] // Hard-coded 0x0011 (17 function groups)
     }
 }
 
@@ -54,6 +54,6 @@ mod tests {
     #[test]
     fn test_fn_group_count_record_data_value() {
         let record = FnGroupCountRecord::new();
-        assert_eq!(&record.data()[..], &0x000Eu16.to_le_bytes());
+        assert_eq!(&record.data()[..], &0x0011u16.to_le_bytes());
     }
 }

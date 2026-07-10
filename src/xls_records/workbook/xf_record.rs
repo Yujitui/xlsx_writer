@@ -120,8 +120,8 @@ impl Default for Pattern {
     fn default() -> Self {
         Pattern {
             pattern: 0,
-            pattern_fore_colour: 0,
-            pattern_back_colour: 0,
+            pattern_fore_colour: 64,
+            pattern_back_colour: 65,
         }
     }
 }
@@ -166,6 +166,7 @@ impl Default for Protection {
 /// - `borders`: 边框样式
 /// - `pattern`: 填充图案
 /// - `protection`: 保护设置
+/// - `used_attributes`: 已用属性位掩码（每位对应font/fmt/align/border/pattern/prot是否显式设置）
 #[derive(Debug, Clone)]
 pub struct XF {
     pub font_idx: u16,
@@ -174,17 +175,19 @@ pub struct XF {
     pub borders: Borders,
     pub pattern: Pattern,
     pub protection: Protection,
+    pub used_attributes: u8,
 }
 
 impl Default for XF {
     fn default() -> Self {
         XF {
             font_idx: 0,
-            format_idx: 164,
+            format_idx: 0,
             alignment: Alignment::default(),
             borders: Borders::default(),
             pattern: Pattern::default(),
             protection: Protection::default(),
+            used_attributes: 0xF4,
         }
     }
 }
@@ -216,9 +219,11 @@ pub enum XFType {
 ///
 /// - `xf`: XF结构体，包含所有格式属性
 /// - `xf_type`: XF类型（单元格格式或样式格式）
+/// - `parent_index`: 父样式XF索引（仅Cell类型使用，Style类型忽略）
 pub struct XFRecord {
-    xf: XF,
-    xf_type: XFType,
+    pub xf: XF,
+    pub xf_type: XFType,
+    pub parent_index: u16,
 }
 
 impl XFRecord {
@@ -226,6 +231,7 @@ impl XFRecord {
         XFRecord {
             xf,
             xf_type: XFType::Cell,
+            parent_index: 0,
         }
     }
 }
@@ -235,6 +241,7 @@ impl Default for XFRecord {
         XFRecord {
             xf: XF::default(),
             xf_type: XFType::Style,
+            parent_index: 0,
         }
     }
 }
@@ -253,16 +260,15 @@ impl BiffRecord for XFRecord {
         // 2 bytes: format index
         buf.extend_from_slice(&self.xf.format_idx.to_le_bytes());
 
-        // 2 bytes: protection + parent style
-        let prot_bits: u16 = match self.xf_type {
+        // 2 bytes: protection + parent style index
+        let prot_word: u16 = match self.xf_type {
             XFType::Cell => {
-                ((self.xf.protection.cell_locked & 0x01) as u16)
-                    | (((self.xf.protection.formula_hidden & 0x01) as u16) << 1)
+                let bits = ((self.xf.protection.cell_locked & 0x01) as u16)
+                    | (((self.xf.protection.formula_hidden & 0x01) as u16) << 1);
+                bits | ((self.parent_index & 0x0FFF) << 4)
             }
             XFType::Style => 0xFFF5,
         };
-        let parent_idx: u16 = 0xFFFF;
-        let prot_word = prot_bits | (parent_idx & 0xFFF0);
         buf.extend_from_slice(&prot_word.to_le_bytes());
 
         // 1 byte: alignment (horz + wrap + vert)
@@ -282,52 +288,29 @@ impl BiffRecord for XFRecord {
         buf.push(txt);
 
         // 1 byte: used attributes
-        let used_attr = match self.xf_type {
-            XFType::Cell => 0xF8,
-            XFType::Style => 0xF4,
-        };
-        buf.push(used_attr);
-
-        // Process borders (set colour to 0 if no line)
-        let mut left_colour = self.xf.borders.left_colour;
-        let mut right_colour = self.xf.borders.right_colour;
-        let mut top_colour = self.xf.borders.top_colour;
-        let mut bottom_colour = self.xf.borders.bottom_colour;
-        let mut diag_colour = self.xf.borders.diag_colour;
-
-        if self.xf.borders.left == 0 {
-            left_colour = 0;
-        }
-        if self.xf.borders.right == 0 {
-            right_colour = 0;
-        }
-        if self.xf.borders.top == 0 {
-            top_colour = 0;
-        }
-        if self.xf.borders.bottom == 0 {
-            bottom_colour = 0;
-        }
-        if self.xf.borders.diag == 0 {
-            diag_colour = 0;
-        }
+        buf.push(self.xf.used_attributes);
 
         // 4 bytes: border lines (left, right, top, bottom + colors)
         let brd1: u32 = ((self.xf.borders.left as u32) & 0x0F)
             | (((self.xf.borders.right as u32) & 0x0F) << 4)
             | (((self.xf.borders.top as u32) & 0x0F) << 8)
             | (((self.xf.borders.bottom as u32) & 0x0F) << 12)
-            | (((left_colour as u32) & 0x7F) << 16)
-            | (((right_colour as u32) & 0x7F) << 23)
+            | (((self.xf.borders.left_colour as u32) & 0x7F) << 16)
+            | (((self.xf.borders.right_colour as u32) & 0x7F) << 23)
             | (((self.xf.borders.need_diag1 as u32) & 0x01) << 30)
             | (((self.xf.borders.need_diag2 as u32) & 0x01) << 31);
         buf.extend_from_slice(&brd1.to_le_bytes());
 
         // 4 bytes: border colors (top, bottom, diag + style)
-        let brd2: u32 = ((top_colour as u32) & 0x7F)
-            | (((bottom_colour as u32) & 0x7F) << 7)
-            | (((diag_colour as u32) & 0x7F) << 14)
+        let mut brd2: u32 = ((self.xf.borders.top_colour as u32) & 0x7F)
+            | (((self.xf.borders.bottom_colour as u32) & 0x7F) << 7)
+            | (((self.xf.borders.diag_colour as u32) & 0x7F) << 14)
             | (((self.xf.borders.diag as u32) & 0x0F) << 21)
             | (((self.xf.pattern.pattern as u32) & 0x3F) << 26);
+        // Reserved bit 25 (set for Cell XF to match Excel output)
+        if self.xf_type == XFType::Cell {
+            brd2 |= 1 << 25;
+        }
         buf.extend_from_slice(&brd2.to_le_bytes());
 
         // 2 bytes: pattern (fore + back color)
@@ -361,6 +344,7 @@ mod tests {
         let record = XFRecord {
             xf,
             xf_type: XFType::Style,
+            parent_index: 0,
         };
         let data = record.data();
 
@@ -370,10 +354,47 @@ mod tests {
 
     #[test]
     fn test_xf_record_cell_type() {
-        let record = XFRecord::new(XF::default());
+        let xf = XF {
+            used_attributes: 0xF8,
+            ..XF::default()
+        };
+        let record = XFRecord::new(xf);
         let data = record.data();
 
-        // For cell XF, used_attr should be 0xF8
+        // For cell XF, used_attr should come from the struct field
         assert_eq!(data[9], 0xF8);
+    }
+
+    #[test]
+    fn test_xf_record_parent_index() {
+        let xf = XF {
+            used_attributes: 0x00,
+            ..XF::default()
+        };
+        let record = XFRecord {
+            xf,
+            xf_type: XFType::Cell,
+            parent_index: 5,
+        };
+        let data = record.data();
+
+        // prot_word = locked | (hidden<<1) | (parent_index<<4)
+        // = 0x0001 | (5 << 4) = 0x0001 | 0x0050 = 0x0051
+        assert_eq!(&data[4..6], &0x0051u16.to_le_bytes());
+    }
+
+    #[test]
+    fn test_xf_record_used_attributes() {
+        let xf = XF {
+            used_attributes: 0x9C,
+            ..XF::default()
+        };
+        let record = XFRecord {
+            xf,
+            xf_type: XFType::Style,
+            parent_index: 0,
+        };
+        let data = record.data();
+        assert_eq!(data[9], 0x9C);
     }
 }

@@ -16,6 +16,7 @@ pub mod worksheet;
 pub mod biff_record;
 pub mod bof_record;
 pub mod eof_record;
+pub mod ole_property_set;
 pub mod parseable;
 pub mod record_type;
 pub mod types;
@@ -23,6 +24,11 @@ pub mod utils;
 
 pub use record_type::RecordType;
 pub use utils::{encode_biff_string_v1, encode_biff_string_v2};
+
+pub use ole_property_set::{
+    build_document_summary_information_stream, build_summary_information_stream,
+    DocSummaryInfoProps, SummaryInfoProps, OLE_METADATA_STREAM_SIZE,
+};
 
 pub use biff_record::BiffRecord;
 pub use bof_record::{BoFRecord, BofType};
@@ -55,6 +61,7 @@ pub use workbook::{
     sst_record::{ContinueRecord, SSTRecord, SSTRecordData, SharedStringTable},
     style_record::StyleRecord,
     tab_id_record::TabIDRecord,
+    unknown_01c0_record::Unknown01C0Record,
     use_selfs_record::UseSelfsRecord,
     window1_record::Window1Record,
     window_protect_record::WindowProtectRecord,
