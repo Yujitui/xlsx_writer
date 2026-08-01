@@ -26,17 +26,36 @@ pub trait ParsableRecord: Sized {
     fn apply(&self, state: &mut ParseState) -> Result<(), XlsError>;
 }
 
+/// 单个字符串在 SST 解析过程中的进度阶段
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SstStringStage {
+    /// 正在读取字符串头部（cch / grbit / cRun / cbExtRst）
+    Header,
+    /// 正在读取字符数据
+    Chars,
+    /// 正在跳过 Rich Text runs 数据（cRun * 4 字节）
+    Rich,
+    /// 正在跳过扩展（注音）数据（ext_size 字节）
+    Ext,
+}
+
 /// 跨边界部分字符串状态
 #[derive(Debug)]
 pub struct PartialString {
+    pub stage: SstStringStage,
     pub char_count: usize,
     pub is_utf16: bool,
     pub has_rich: bool,
     pub has_ext: bool,
     pub rich_runs: u16,
     pub ext_size: u32,
+    /// 当前 stage 已消耗的字节数
     pub bytes_read: usize,
+    /// Header 阶段的头部字节，或 Chars 阶段当前压缩模式的字符字节
     pub buffer: Vec<u8>,
+    /// 已完成的字符段（压缩模式, 字节）。当 CONTINUE 续接标志切换压缩模式时，
+    /// 前一段的字节按原模式保存在此，最后一段使用 `buffer`。
+    pub segments: Vec<(bool, Vec<u8>)>,
 }
 
 /// SST 解析状态机
@@ -59,6 +78,11 @@ impl SSTParserState {
     }
 
     /// 解析数据块，将完成的字符串添加到 SST
+    ///
+    /// 依据 BIFF8 规范处理跨记录边界的字符串：
+    /// - 字符串字符数据被分片到 CONTINUE 记录时，续接块以 1 字节 grbit 开头，
+    ///   其 bit0 重新指定后续字符的压缩模式（8 位或 UTF-16）。
+    /// - Rich Text runs 与扩展数据可以跨块，但续接块前没有该标志字节。
     pub fn parse_chunk(
         &mut self,
         data: &[u8],
@@ -66,139 +90,269 @@ impl SSTParserState {
     ) -> Result<(), XlsError> {
         let mut offset = 0;
 
-        // 如果有未完成的字符串，先尝试完成
-        if let Some(ref mut partial) = self.current_string {
-            let needed = if partial.is_utf16 {
-                partial.char_count * 2 - partial.bytes_read
-            } else {
-                partial.char_count - partial.bytes_read
-            };
-
-            let available = data.len().min(needed);
-            partial.buffer.extend_from_slice(&data[..available]);
-            partial.bytes_read += available;
-            offset += available;
-
-            let total_needed = if partial.is_utf16 {
-                partial.char_count * 2
-            } else {
-                partial.char_count
-            };
-
-            if partial.bytes_read >= total_needed {
-                // 字符串完成，添加到 SST
-                let s = Self::decode_string(&partial.buffer, partial.is_utf16);
-                sst.push_string(s);
-                self.strings_parsed += 1;
-                self.current_string = None;
-            } else {
-                // 还需要更多数据
-                return Ok(());
-            }
-        }
-
-        // 解析完整的字符串
-        while self.strings_parsed < self.unique_count && offset < data.len() {
-            // 检查是否有足够数据读取头部（3 字节）
-            if offset + 3 > data.len() {
+        loop {
+            if self.strings_parsed >= self.unique_count || offset >= data.len() {
                 return Ok(());
             }
 
-            let char_count = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;
-            let flag = data[offset + 2];
-            offset += 3;
-
-            let is_utf16 = (flag & 0x01) != 0;
-            let has_rich = (flag & 0x08) != 0;
-            let has_ext = (flag & 0x04) != 0;
-
-            // 读取 Rich/Ext 信息
-            let mut rich_runs = 0u16;
-            let mut ext_size = 0u32;
-
-            if has_rich {
-                if offset + 2 > data.len() {
-                    // 保存状态到下一次
-                    self.current_string = Some(PartialString {
-                        char_count,
-                        is_utf16,
-                        has_rich,
-                        has_ext,
+            match self.current_string.take() {
+                // 开始解析新字符串
+                None => {
+                    let mut partial = PartialString {
+                        stage: SstStringStage::Header,
+                        char_count: 0,
+                        is_utf16: false,
+                        has_rich: false,
+                        has_ext: false,
                         rich_runs: 0,
                         ext_size: 0,
                         bytes_read: 0,
                         buffer: Vec::new(),
-                    });
-                    return Ok(());
+                        segments: Vec::new(),
+                    };
+
+                    if !self.read_header(data, &mut offset, &mut partial) {
+                        self.current_string = Some(partial);
+                        return Ok(());
+                    }
+
+                    // 头部完整，读取字符数据
+                    if !self.read_chars(data, &mut offset, &mut partial, sst) {
+                        self.current_string = Some(partial);
+                        return Ok(());
+                    }
+
+                    // 字符已入表；若还有 Rich/Ext 数据，继续跳过
+                    if partial.has_rich || partial.has_ext {
+                        self.current_string = Some(partial);
+                    }
                 }
-                rich_runs = u16::from_le_bytes([data[offset], data[offset + 1]]);
-                offset += 2;
-            }
+                // 恢复未完成的字符串
+                Some(mut partial) => {
+                    match partial.stage {
+                        SstStringStage::Header => {
+                            if !self.read_header(data, &mut offset, &mut partial) {
+                                self.current_string = Some(partial);
+                                return Ok(());
+                            }
+                            if !self.read_chars(data, &mut offset, &mut partial, sst) {
+                                self.current_string = Some(partial);
+                                return Ok(());
+                            }
+                            if partial.has_rich || partial.has_ext {
+                                self.current_string = Some(partial);
+                            }
+                        }
+                        SstStringStage::Chars => {
+                            // 字符串被分片：续接块首字节为新的 grbit（仅 bit0 有效）
+                            if offset >= data.len() {
+                                self.current_string = Some(partial);
+                                return Ok(());
+                            }
+                            let cont_flag = data[offset];
+                            offset += 1;
 
-            if has_ext {
-                if offset + 4 > data.len() {
-                    self.current_string = Some(PartialString {
-                        char_count,
-                        is_utf16,
-                        has_rich,
-                        has_ext,
-                        rich_runs,
-                        ext_size: 0,
-                        bytes_read: 0,
-                        buffer: Vec::new(),
-                    });
-                    return Ok(());
+                            let new_utf16 = (cont_flag & 0x01) != 0;
+                            if new_utf16 != partial.is_utf16 {
+                                // 压缩模式切换：把已收集的字节按旧模式保存为独立段
+                                if !partial.buffer.is_empty() {
+                                    partial.segments.push((
+                                        partial.is_utf16,
+                                        std::mem::take(&mut partial.buffer),
+                                    ));
+                                }
+                                partial.is_utf16 = new_utf16;
+                            }
+
+                            if !self.read_chars(data, &mut offset, &mut partial, sst) {
+                                self.current_string = Some(partial);
+                                return Ok(());
+                            }
+                            if partial.has_rich || partial.has_ext {
+                                self.current_string = Some(partial);
+                            }
+                        }
+                        SstStringStage::Rich | SstStringStage::Ext => {
+                            if !self.skip_aux(data, &mut offset, &mut partial) {
+                                self.current_string = Some(partial);
+                                return Ok(());
+                            }
+                        }
+                    }
                 }
-                ext_size = u32::from_le_bytes([
-                    data[offset],
-                    data[offset + 1],
-                    data[offset + 2],
-                    data[offset + 3],
-                ]);
-                offset += 4;
             }
+        }
+    }
 
-            // 尝试读取字符串
-            let string_bytes = if is_utf16 { char_count * 2 } else { char_count };
-
-            if offset + string_bytes > data.len() {
-                // 字符串跨边界，创建 PartialString
-                let available = data.len() - offset;
-                self.current_string = Some(PartialString {
-                    char_count,
-                    is_utf16,
-                    has_rich,
-                    has_ext,
-                    rich_runs,
-                    ext_size,
-                    bytes_read: available,
-                    buffer: data[offset..].to_vec(),
-                });
-                return Ok(());
-            }
-
-            // 完整字符串，直接解析
-            let s = Self::decode_string(&data[offset..offset + string_bytes], is_utf16);
-            sst.push_string(s);
-            self.strings_parsed += 1;
-
-            offset += string_bytes;
-            // 跳过 Rich Text 和 Extension 数据
-            offset += (rich_runs as usize * 4) + ext_size as usize;
+    /// 读取并解析字符串头部。头部完整返回 true，否则返回 false（等待更多数据）。
+    fn read_header(
+        &self,
+        data: &[u8],
+        offset: &mut usize,
+        partial: &mut PartialString,
+    ) -> bool {
+        // 先补齐 cch + grbit（3 字节）
+        if partial.buffer.len() < 3 {
+            let take = (3 - partial.buffer.len()).min(data.len() - *offset);
+            partial.buffer.extend_from_slice(&data[*offset..*offset + take]);
+            *offset += take;
+        }
+        if partial.buffer.len() < 3 {
+            return false;
         }
 
-        Ok(())
+        let flag = partial.buffer[2];
+        let has_rich = (flag & 0x08) != 0;
+        let has_ext = (flag & 0x04) != 0;
+        let need = 3 + if has_rich { 2 } else { 0 } + if has_ext { 4 } else { 0 };
+
+        if partial.buffer.len() < need {
+            let take = (need - partial.buffer.len()).min(data.len() - *offset);
+            partial.buffer.extend_from_slice(&data[*offset..*offset + take]);
+            *offset += take;
+        }
+        if partial.buffer.len() < need {
+            return false;
+        }
+
+        partial.char_count = u16::from_le_bytes([partial.buffer[0], partial.buffer[1]]) as usize;
+        partial.is_utf16 = (flag & 0x01) != 0;
+        partial.has_rich = has_rich;
+        partial.has_ext = has_ext;
+
+        let mut pos = 3;
+        if has_rich {
+            partial.rich_runs =
+                u16::from_le_bytes([partial.buffer[pos], partial.buffer[pos + 1]]);
+            pos += 2;
+        }
+        if has_ext {
+            partial.ext_size = u32::from_le_bytes([
+                partial.buffer[pos],
+                partial.buffer[pos + 1],
+                partial.buffer[pos + 2],
+                partial.buffer[pos + 3],
+            ]);
+        }
+
+        partial.stage = SstStringStage::Chars;
+        partial.bytes_read = 0;
+        partial.buffer.clear();
+        true
+    }
+
+    /// 读取字符数据。字符串字符完整读取并解码入表后返回 true，
+    /// 跨块时返回 false 并保存进度（此时不修改 `current_string`）。
+    fn read_chars(
+        &mut self,
+        data: &[u8],
+        offset: &mut usize,
+        partial: &mut PartialString,
+        sst: &mut SharedStringTable,
+    ) -> bool {
+        let total = if partial.is_utf16 {
+            partial.char_count * 2
+        } else {
+            partial.char_count
+        };
+
+        // 字节数足够则直接完成
+        let available = data.len() - *offset;
+        if partial.bytes_read + available < total {
+            partial.buffer.extend_from_slice(&data[*offset..]);
+            partial.bytes_read += available;
+            *offset = data.len();
+            return false;
+        }
+
+        let take = total.saturating_sub(partial.bytes_read);
+        if take > 0 {
+            partial.buffer.extend_from_slice(&data[*offset..*offset + take]);
+            *offset += take;
+        }
+        partial.bytes_read = total;
+
+        // 字符串完成，解码并加入 SST
+        let s = Self::decode_string_parts(partial);
+        sst.push_string(s);
+        self.strings_parsed += 1;
+
+        // 进入 Rich/Ext 跳过阶段（若有）
+        partial.stage = if partial.has_rich && partial.rich_runs > 0 {
+            SstStringStage::Rich
+        } else if partial.has_ext && partial.ext_size > 0 {
+            SstStringStage::Ext
+        } else {
+            SstStringStage::Header // 字符串完全结束
+        };
+        partial.bytes_read = 0;
+        partial.buffer.clear();
+        partial.segments.clear();
+        true
+    }
+
+    /// 跳过 Rich Text runs 与扩展数据。全部跳过完成返回 true。
+    fn skip_aux(
+        &self,
+        data: &[u8],
+        offset: &mut usize,
+        partial: &mut PartialString,
+    ) -> bool {
+        loop {
+            let need_total = match partial.stage {
+                SstStringStage::Rich => partial.rich_runs as usize * 4,
+                SstStringStage::Ext => partial.ext_size as usize,
+                _ => 0,
+            };
+            let remaining = need_total.saturating_sub(partial.bytes_read);
+            let available = data.len() - *offset;
+
+            if available < remaining {
+                partial.bytes_read += available;
+                *offset = data.len();
+                return false;
+            }
+
+            *offset += remaining;
+            partial.bytes_read = need_total;
+
+            match partial.stage {
+                SstStringStage::Rich if partial.has_ext => {
+                    partial.stage = SstStringStage::Ext;
+                    partial.bytes_read = 0;
+                }
+                _ => {
+                    partial.stage = SstStringStage::Header;
+                    return true;
+                }
+            }
+        }
     }
 
     /// 完成解析，处理可能未完成的字符串
     pub fn finish(mut self, sst: &mut SharedStringTable) -> Result<(), XlsError> {
         if let Some(partial) = self.current_string.take() {
-            // 尝试使用已有的数据解码
-            let s = Self::decode_string(&partial.buffer, partial.is_utf16);
-            sst.push_string(s);
-            self.strings_parsed += 1;
+            if partial.stage == SstStringStage::Chars {
+                // 尝试使用已有的数据解码（可能是截断的字符串）
+                let s = Self::decode_string_parts(&partial);
+                sst.push_string(s);
+                self.strings_parsed += 1;
+            }
         }
         Ok(())
+    }
+
+    /// 解码一个字符串（可能包含多个不同压缩模式的段）
+    fn decode_string_parts(partial: &PartialString) -> String {
+        let mut out = String::new();
+        for (is_utf16, bytes) in partial
+            .segments
+            .iter()
+            .chain(std::iter::once(&(partial.is_utf16, partial.buffer.clone())))
+        {
+            out.push_str(&Self::decode_string(bytes, *is_utf16));
+        }
+        out
     }
 
     fn decode_string(data: &[u8], is_utf16: bool) -> String {

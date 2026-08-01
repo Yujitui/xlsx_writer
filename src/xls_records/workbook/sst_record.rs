@@ -96,15 +96,15 @@ impl SharedStringTable {
         let mut table = SharedStringTable::new();
         table.total_refs = total_refs as usize;
 
-        // 收集所有数据（包括 CONTINUE）
-        let mut all_data = data[8..].to_vec();
+        // 使用规范的状态机逐块解析，正确处理 CONTINUE 续接标志字节
+        let mut parser = crate::xls_records::SSTParserState::new(total_refs, unique_count as u32);
+        parser.parse_chunk(&data[8..], &mut table)?;
 
-        // 检查并读取 CONTINUE 记录
         loop {
             match next_record_id()? {
                 Some((id, _)) if id == CONTINUE_RECORD_ID => {
                     if let Some((_, cont_data)) = read_continue()? {
-                        all_data.extend_from_slice(&cont_data);
+                        parser.parse_chunk(&cont_data, &mut table)?;
                     } else {
                         break;
                     }
@@ -113,101 +113,7 @@ impl SharedStringTable {
             }
         }
 
-        // 解析字符串
-        let mut offset = 0;
-        for _ in 0..unique_count {
-            if offset >= all_data.len() {
-                return Err(XlsError::InvalidFormat(
-                    "SST data incomplete while parsing strings".to_string(),
-                ));
-            }
-
-            // 读取字符数（2字节）
-            if offset + 2 > all_data.len() {
-                return Err(XlsError::InvalidFormat(
-                    "SST string header incomplete".to_string(),
-                ));
-            }
-            let char_count = u16::from_le_bytes([all_data[offset], all_data[offset + 1]]) as usize;
-            offset += 2;
-
-            // 读取标志字节
-            if offset >= all_data.len() {
-                return Err(XlsError::InvalidFormat(
-                    "SST string flag byte missing".to_string(),
-                ));
-            }
-            let flag = all_data[offset];
-            offset += 1;
-
-            let is_utf16 = (flag & 0x01) != 0;
-            let has_rich = (flag & 0x08) != 0;
-            let has_ext = (flag & 0x04) != 0;
-
-            // 读取 Rich Text 信息
-            let mut rich_runs = 0u16;
-            if has_rich {
-                if offset + 2 > all_data.len() {
-                    return Err(XlsError::InvalidFormat(
-                        "SST rich text info incomplete".to_string(),
-                    ));
-                }
-                rich_runs = u16::from_le_bytes([all_data[offset], all_data[offset + 1]]);
-                offset += 2;
-            }
-
-            // 读取 Extension 信息
-            let mut ext_size = 0u32;
-            if has_ext {
-                if offset + 4 > all_data.len() {
-                    return Err(XlsError::InvalidFormat(
-                        "SST extension info incomplete".to_string(),
-                    ));
-                }
-                ext_size = u32::from_le_bytes([
-                    all_data[offset],
-                    all_data[offset + 1],
-                    all_data[offset + 2],
-                    all_data[offset + 3],
-                ]);
-                offset += 4;
-            }
-
-            // 读取字符串数据
-            let string_bytes = if is_utf16 { char_count * 2 } else { char_count };
-
-            if offset + string_bytes > all_data.len() {
-                return Err(XlsError::InvalidFormat(format!(
-                    "SST string data incomplete: need {} bytes, have {}",
-                    string_bytes,
-                    all_data.len() - offset
-                )));
-            }
-
-            let string = if is_utf16 {
-                // UTF-16LE 解码
-                let utf16_data = &all_data[offset..offset + string_bytes];
-                let u16_vec: Vec<u16> = utf16_data
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-                    .collect();
-                String::from_utf16(&u16_vec)
-                    .unwrap_or_else(|_| String::from_utf8_lossy(utf16_data).to_string())
-            } else {
-                // ASCII/Latin-1 解码
-                let ascii_data = &all_data[offset..offset + string_bytes];
-                String::from_utf8_lossy(ascii_data).to_string()
-            };
-            offset += string_bytes;
-
-            // 添加到表
-            table.strings.push(string);
-            table.counts.push(1);
-
-            // 跳过 Rich Text 和 Extension 数据
-            let skip_bytes = (rich_runs as usize * 4) + ext_size as usize;
-            offset += skip_bytes;
-        }
+        parser.finish(&mut table)?;
 
         // 重建 index_map
         for (idx, s) in table.strings.iter().enumerate() {
