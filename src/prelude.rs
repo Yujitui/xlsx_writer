@@ -15,6 +15,12 @@ pub use crate::style_library::{StyleDefinition, StyleLibrary};
 // 3. 錯誤體系
 pub use crate::style_factory::error::StyleFactoryError;
 
-// 4. 外部依賴的關鍵類型（方便用戶配置樣式）
+// 4. 打印属性配置
+pub use crate::print_options::{
+    Margins, Orientation, PageOrder, PaperSize, PrintArea, PrintOptions, RepeatColumns, RepeatRows,
+    Scaling,
+};
+
+// 5. 外部依賴的關鍵類型（方便用戶配置樣式）
 pub use polars::prelude::DataFrame;
 pub use rust_xlsxwriter::{Color, Format, FormatAlign, FormatBorder};

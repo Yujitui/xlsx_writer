@@ -3,6 +3,7 @@ pub mod dimension_factory;
 mod error;
 pub mod merge_factory;
 pub mod prelude;
+pub mod print_options;
 pub mod readsheet;
 pub mod region_factory;
 pub mod region_styles;
@@ -17,6 +18,10 @@ pub mod xls_records;
 pub use cell::Cell;
 pub use dimension_factory::{DimensionFactory, DimensionRule, DimensionTarget, DimensionValue};
 pub use error::{XlsError, XlsxError};
+pub use print_options::{
+    Margins, Orientation, PageOrder, PaperSize, PrintArea, PrintOptions, RepeatColumns, RepeatRows,
+    Scaling,
+};
 pub use region_factory::RegionFactory;
 pub use region_styles::RegionStyles;
 pub use sheet_region::SheetRegion;

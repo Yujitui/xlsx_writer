@@ -8,6 +8,7 @@
 
 use polars::prelude::*;
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -906,5 +907,59 @@ mod dimension_factory_tests {
         assert_eq!(result.row_heights.get(&3), Some(&20.0)); // 数据行 2
                                                              // 第1行被后面的规则覆盖
         assert_eq!(result.row_heights.get(&1), Some(&35.0)); // 数据行 0
+    }
+
+    /// 测试按工作表设置打印属性
+    #[test]
+    fn test_save_with_print_properties() {
+        setup();
+
+        let df = df! {
+            "name" => ["Alice", "Bob"],
+            "age" => [25, 30]
+        }
+        .expect("Failed to create DataFrame");
+
+        let mut sheet_options = HashMap::new();
+        sheet_options.insert(
+            "A".to_string(),
+            PrintOptions {
+                orientation: Orientation::Landscape,
+                paper_size: PaperSize::A4,
+                scaling: Some(Scaling::FitToPages(1, 0)),
+                margins: Margins {
+                    left: Some(1.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+
+        // 测试 .xlsx：应用打印属性并保存成功
+        let output_xlsx = format!("{}/test_print_properties.xlsx", DATA_DIR);
+        Workbook::new()
+            .expect("Failed to create workbook")
+            .insert(df.clone(), Some("A".to_string()), RegionStyles::new())
+            .expect("Failed to insert sheet")
+            .save_with_print_properties(&output_xlsx, sheet_options.clone())
+            .expect("Failed to save xlsx with print properties");
+
+        assert!(Path::new(&output_xlsx).exists(), "XLSX file should exist");
+        let metadata = fs::metadata(&output_xlsx).expect("Failed to read metadata");
+        assert!(metadata.len() > 0, "XLSX file should not be empty");
+
+        // 测试 .xls：打印属性被忽略，保存不报错
+        let output_xls = format!("{}/test_print_properties.xls", DATA_DIR);
+        Workbook::new()
+            .expect("Failed to create workbook")
+            .insert(df, Some("A".to_string()), RegionStyles::new())
+            .expect("Failed to insert sheet")
+            .save_with_print_properties(&output_xls, sheet_options)
+            .expect("Failed to save xls with print properties");
+
+        assert!(Path::new(&output_xls).exists(), "XLS file should exist");
+
+        println!("\n✅ 测试通过: 打印属性 - xlsx/xls");
+        cleanup_old_files("test_print_properties");
     }
 }

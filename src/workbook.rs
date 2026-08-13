@@ -8,6 +8,7 @@ use crate::cell::Cell;
 use crate::error::XlsxError;
 use crate::merge_factory::MergeFactory;
 use crate::prelude::ReadSheet;
+use crate::print_options::{apply_print_options, PrintOptions};
 use crate::region_styles::RegionStyles;
 use crate::sheet_region::SheetRegion;
 use crate::style_factory::StyleFactory;
@@ -975,7 +976,30 @@ impl Workbook {
         if is_xls {
             self.save_as_xls(path)
         } else {
-            self.save_as_xlsx(path)
+            self.save_as_xlsx_with_options(path, None)
+        }
+    }
+
+    /// 将工作簿保存为 Excel 文件，并应用按工作表指定的打印属性
+    ///
+    /// 仅当目标文件后缀为 `.xlsx` 时才会应用打印属性；`.xls` 格式会忽略这些设置。
+    ///
+    /// # 参数说明
+    ///
+    /// * `path`: 目标文件路径
+    /// * `sheet_options`: 工作表名称到打印属性的映射；未出现在 map 中的工作表不应用任何打印设置
+    pub fn save_with_print_properties(
+        &self,
+        path: &str,
+        sheet_options: HashMap<String, PrintOptions>,
+    ) -> Result<(), Box<dyn Error>> {
+        let is_xls = path.to_lowercase().ends_with(".xls");
+
+        if is_xls {
+            eprintln!("警告: .xls 格式不支持打印属性设置，将忽略相关配置");
+            self.save_as_xls(path)
+        } else {
+            self.save_as_xlsx_with_options(path, Some(&sheet_options))
         }
     }
 
@@ -1294,11 +1318,16 @@ impl Workbook {
     ///
     /// # 参数
     /// * `path`: 目标文件路径
+    /// * `sheet_options`: 可选的按工作表打印属性映射
     ///
     /// # 返回值
     /// * `Ok(())` - 保存成功
     /// * `Err(Box<dyn Error>)` - 保存失败
-    fn save_as_xlsx(&self, path: &str) -> Result<(), Box<dyn Error>> {
+    fn save_as_xlsx_with_options(
+        &self,
+        path: &str,
+        sheet_options: Option<&HashMap<String, PrintOptions>>,
+    ) -> Result<(), Box<dyn Error>> {
         // 创建新的 Excel 工作簿实例，作为导出的目标容器
         let mut workbook = rust_xlsxwriter::Workbook::new();
 
@@ -1439,6 +1468,13 @@ impl Workbook {
             // 然后覆盖指定列的宽度
             for (col, width) in col_width_settings {
                 worksheet.set_column_width(col, width)?;
+            }
+
+            // --- 步骤5: 应用打印属性（仅 xlsx） ---
+            if let Some(options_map) = sheet_options {
+                if let Some(print_options) = options_map.get(&sheet.name) {
+                    apply_print_options(worksheet, print_options)?;
+                }
             }
         }
 
