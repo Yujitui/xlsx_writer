@@ -28,6 +28,15 @@ pub enum Cell {
     Boolean(bool),
 }
 
+/// 将有限浮点数转为 Cell::Number，非有限值（NaN/Inf/-Inf）视为空值
+fn finite_or_none(num: f64) -> Option<Cell> {
+    if num.is_finite() {
+        Some(Cell::Number(num))
+    } else {
+        None
+    }
+}
+
 impl Cell {
     /// 将单元格内容转换为字符串
     pub fn to_string(&self) -> String {
@@ -50,18 +59,18 @@ impl Cell {
         match value {
             AnyValue::String(s) => Some(Cell::Text(s.to_string())),
             AnyValue::StringOwned(s) => Some(Cell::Text(s.to_string())),
-            AnyValue::Float64(n) => Some(Cell::Number(*n)),
-            AnyValue::Float32(n) => Some(Cell::Number(*n as f64)),
-            AnyValue::Int8(v) => Some(Cell::Number(*v as f64)),
-            AnyValue::Int16(v) => Some(Cell::Number(*v as f64)),
-            AnyValue::Int32(v) => Some(Cell::Number(*v as f64)),
-            AnyValue::Int64(v) => Some(Cell::Number(*v as f64)),
-            AnyValue::UInt8(v) => Some(Cell::Number(*v as f64)),
-            AnyValue::UInt16(v) => Some(Cell::Number(*v as f64)),
-            AnyValue::UInt32(v) => Some(Cell::Number(*v as f64)),
-            AnyValue::UInt64(v) => Some(Cell::Number(*v as f64)),
+            AnyValue::Float64(n) => finite_or_none(*n),
+            AnyValue::Float32(n) => finite_or_none(*n as f64),
+            AnyValue::Int8(v) => finite_or_none(*v as f64),
+            AnyValue::Int16(v) => finite_or_none(*v as f64),
+            AnyValue::Int32(v) => finite_or_none(*v as f64),
+            AnyValue::Int64(v) => finite_or_none(*v as f64),
+            AnyValue::UInt8(v) => finite_or_none(*v as f64),
+            AnyValue::UInt16(v) => finite_or_none(*v as f64),
+            AnyValue::UInt32(v) => finite_or_none(*v as f64),
+            AnyValue::UInt64(v) => finite_or_none(*v as f64),
             AnyValue::Boolean(b) => Some(Cell::Boolean(*b)),
-            AnyValue::Date(days) => Some(Cell::Number(*days as f64)),
+            AnyValue::Date(days) => finite_or_none(*days as f64),
             AnyValue::Datetime(v, unit, _) => {
                 // 转换为 Excel 日期序列号（从 1899-12-30 起的天数）
                 let days = match unit {
@@ -69,7 +78,7 @@ impl Cell {
                     polars::datatypes::TimeUnit::Microseconds => *v as f64 / 86_400_000_000.0,
                     polars::datatypes::TimeUnit::Nanoseconds => *v as f64 / 86_400_000_000_000.0,
                 };
-                Some(Cell::Number(days))
+                finite_or_none(days)
             }
             AnyValue::Null => None,
             _ => {
@@ -106,5 +115,31 @@ mod tests {
             Some(Cell::Boolean(false))
         );
         assert_eq!(Cell::from_any_value(&AnyValue::Null), None);
+    }
+
+    #[test]
+    fn test_from_any_value_nan_inf_returns_none() {
+        assert_eq!(Cell::from_any_value(&AnyValue::Float64(f64::NAN)), None);
+        assert_eq!(
+            Cell::from_any_value(&AnyValue::Float64(f64::INFINITY)),
+            None
+        );
+        assert_eq!(
+            Cell::from_any_value(&AnyValue::Float64(f64::NEG_INFINITY)),
+            None
+        );
+        assert_eq!(Cell::from_any_value(&AnyValue::Float32(f32::NAN)), None);
+        assert_eq!(
+            Cell::from_any_value(&AnyValue::Float32(f32::INFINITY)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_finite_or_none() {
+        assert_eq!(finite_or_none(1.0), Some(Cell::Number(1.0)));
+        assert_eq!(finite_or_none(f64::NAN), None);
+        assert_eq!(finite_or_none(f64::INFINITY), None);
+        assert_eq!(finite_or_none(f64::NEG_INFINITY), None);
     }
 }

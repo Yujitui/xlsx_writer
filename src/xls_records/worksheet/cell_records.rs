@@ -473,11 +473,28 @@ pub fn row_data_to_cell_records(
                 i += 1;
             }
             Some(Cell::Number(num)) => {
-                let mut j = i;
+                // 非有限值（NaN/Inf/-Inf）视为空单元格，直接跳过。
+                // 同时避免 encode_rk_value 返回 None 导致 count == 0 的无限循环。
+                if !num.is_finite() {
+                    i += 1;
+                    continue;
+                }
 
+                // 极大值等无法 RK 编码的数字，直接写 NumberRecord。
+                let current_rk = encode_rk_value(*num);
+                if current_rk.is_none() {
+                    result.extend_from_slice(
+                        &NumberRecord::new(row, col, xf_index, *num).serialize(),
+                    );
+                    i += 1;
+                    continue;
+                }
+
+                // 当前数字可编码，尝试向后合并连续可编码的有限数字
+                let mut j = i + 1;
                 while j < n {
                     if let Some(Cell::Number(n)) = &row_data[j] {
-                        if encode_rk_value(*n).is_some() {
+                        if n.is_finite() && encode_rk_value(*n).is_some() {
                             j += 1;
                         } else {
                             break;
@@ -490,18 +507,12 @@ pub fn row_data_to_cell_records(
                 let count = j - i;
 
                 if count == 1 {
-                    if let Some(rk_encoded) = encode_rk_value(*num) {
-                        result.extend_from_slice(
-                            &RKRecord::new(row, col, xf_index, rk_encoded).serialize(),
-                        );
-                    } else {
-                        result.extend_from_slice(
-                            &NumberRecord::new(row, col, xf_index, *num).serialize(),
-                        );
-                    }
-                } else if count > 1 {
+                    result.extend_from_slice(
+                        &RKRecord::new(row, col, xf_index, current_rk.unwrap()).serialize(),
+                    );
+                } else {
                     let first_col = col;
-                    let last_col = if j > 0 { (j - 1) as u16 } else { col };
+                    let last_col = (j - 1) as u16;
 
                     let mut rk_list: Vec<(u16, i32)> = Vec::new();
                     for k in i..j {
@@ -698,6 +709,54 @@ mod tests {
         let result = row_data_to_cell_records(0, &row_data, 0x0F, &mut sst);
 
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_row_data_to_cell_records_nan_does_not_hang() {
+        use crate::xls_records::workbook::sst_record::SharedStringTable;
+
+        let row_data = vec![
+            Some(Cell::Number(f64::NAN)),
+            Some(Cell::Number(1.0)),
+            Some(Cell::Number(f64::INFINITY)),
+        ];
+        let mut sst = SharedStringTable::new();
+        let result = row_data_to_cell_records(0, &row_data, 0x0F, &mut sst);
+
+        // NaN/Inf 应被跳过（空单元格），只剩 1.0 的 RKRecord
+        assert_eq!(&result[0..2], &0x027Eu16.to_le_bytes());
+    }
+
+    #[test]
+    fn test_row_data_to_cell_records_inf_does_not_hang() {
+        use crate::xls_records::workbook::sst_record::SharedStringTable;
+
+        let row_data = vec![
+            Some(Cell::Number(f64::NEG_INFINITY)),
+            Some(Cell::Number(f64::INFINITY)),
+        ];
+        let mut sst = SharedStringTable::new();
+        let result = row_data_to_cell_records(0, &row_data, 0x0F, &mut sst);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_row_data_to_cell_records_mixed_rk_and_non_rk() {
+        use crate::xls_records::workbook::sst_record::SharedStringTable;
+
+        // 1.0 可 RK 编码；1e308 不可编码；2.0 可 RK 编码
+        let row_data = vec![
+            Some(Cell::Number(1.0)),
+            Some(Cell::Number(1e308)),
+            Some(Cell::Number(2.0)),
+        ];
+        let mut sst = SharedStringTable::new();
+        let result = row_data_to_cell_records(0, &row_data, 0x0F, &mut sst);
+
+        assert!(!result.is_empty());
+        // 第一个记录应为 RKRecord (0x027E)
+        assert_eq!(&result[0..2], &0x027Eu16.to_le_bytes());
     }
 }
 

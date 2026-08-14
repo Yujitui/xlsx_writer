@@ -963,3 +963,71 @@ mod dimension_factory_tests {
         cleanup_old_files("test_print_properties");
     }
 }
+
+/// 测试：包含中文字符串与数字列的 .xls 保存
+#[test]
+fn test_save_xls_with_chinese_strings() {
+    setup();
+
+    let df = df! {
+        "Foo" => &["测试一"; 16],
+        "Bar" => &["示例A"; 16],
+        "Baz" => &["示例B"; 16],
+        "Qux" => &[1.0_f64; 16],
+        "Quux" => &[1000.0_f64; 16],
+        "Corge" => &[0.0_f64; 16],
+        "Grault" => &[900.0_f64; 16],
+        "Garply" => &[""; 16],
+    }
+    .expect("Failed to create DataFrame");
+
+    let region = SheetRegion::from_dataframe(
+        df,
+        "Alpha",
+        Some(true),
+        RegionStyles::default(),
+    )
+    .expect("Failed to create SheetRegion");
+
+    let sheet = WorkSheet::new("Alpha", vec![region])
+        .expect("Failed to create worksheet");
+
+    let output_xls = format!("{}/test_chinese_strings.xls", DATA_DIR);
+    Workbook::new()
+        .expect("Failed to create workbook")
+        .add_sheet(sheet)
+        .save(&output_xls)
+        .expect("Failed to save chinese strings xls");
+
+    assert!(Path::new(&output_xls).exists(), "XLS file should exist");
+    let metadata = fs::metadata(&output_xls).expect("Failed to read metadata");
+    assert!(metadata.len() > 0, "XLS file should not be empty");
+
+    println!("\n✅ 测试通过: 中文字符串 .xls - {}", output_xls);
+    cleanup_old_files("test_chinese_strings");
+}
+
+/// 测试：包含特殊浮点值的数字列保存 .xls 不会卡死
+#[test]
+fn test_xls_with_nan_numbers() {
+    setup();
+
+    let df = df! {
+        "Foo" => &["X", "Y", "Z"],
+        "Bar" => &[100.0_f64, f64::NAN, 300.0_f64],
+    }
+    .expect("Failed to create DataFrame");
+
+    let output_xls = format!("{}/test_nan_numbers.xls", DATA_DIR);
+    Workbook::new()
+        .expect("Failed to create workbook")
+        .insert(df, Some("Sheet1".to_string()), RegionStyles::new())
+        .expect("Failed to insert sheet")
+        .save(&output_xls)
+        .expect("Failed to save xls with NaN numbers");
+
+    assert!(Path::new(&output_xls).exists(), "XLS file should exist");
+
+    println!("\n✅ 测试通过: 含 NaN 数字的 .xls - {}", output_xls);
+    cleanup_old_files("test_nan_numbers");
+}
