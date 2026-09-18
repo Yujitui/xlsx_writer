@@ -4,11 +4,24 @@
 //! 可被 xlsx 和 xls 格式共用。
 
 use polars::datatypes::AnyValue;
+use rust_xlsxwriter::Format;
+
+/// 富文本的一个片段（run）。
+///
+/// 每个片段由一段文本及其字体格式组成。多个片段按顺序拼接即构成
+/// 一个富文本字符串，可用于单元格内的部分格式化（如某段加粗、变色）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RichTextSegment {
+    /// 片段文本内容（不可为空字符串）
+    pub text: String,
+    /// 该片段的字体格式
+    pub format: Format,
+}
 
 /// 通用 Excel 单元格类型
 ///
 /// 封装了 Excel 单元格可以包含的不同数据类型。
-/// 这是一个简化版本，专注于数据导出场景，暂不支持公式和富文本。
+/// 这是一个简化版本，专注于数据导出场景，暂不支持公式。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cell {
     /// 数值类型（f64）
@@ -19,8 +32,14 @@ pub enum Cell {
 
     /// 文本类型
     ///
-    /// 纯文本内容。注意：暂不支持富文本（部分格式）。
+    /// 纯文本内容。
     Text(String),
+
+    /// 富文本类型
+    ///
+    /// 由多个带格式的文本片段组成，支持单元格内部分格式化。
+    /// 注意：仅 .xlsx 写入路径支持完整格式；.xls 路径会降级为纯文本。
+    RichText(Vec<RichTextSegment>),
 
     /// 布尔类型
     ///
@@ -43,6 +62,10 @@ impl Cell {
         match self {
             Cell::Number(n) => n.to_string(),
             Cell::Text(s) => s.clone(),
+            Cell::RichText(segments) => segments
+                .iter()
+                .map(|s| s.text.clone())
+                .collect::<String>(),
             Cell::Boolean(b) => b.to_string(),
         }
     }
@@ -98,6 +121,23 @@ mod tests {
         assert_eq!(Cell::Number(42.0).to_string(), "42");
         assert_eq!(Cell::Text("hello".to_string()).to_string(), "hello");
         assert_eq!(Cell::Boolean(true).to_string(), "true");
+    }
+
+    #[test]
+    fn test_rich_text_to_string_concatenates() {
+        let bold = Format::new().set_bold();
+        let red = Format::new().set_font_color(rust_xlsxwriter::Color::Red);
+        let rich = Cell::RichText(vec![
+            RichTextSegment {
+                text: "Hello".to_string(),
+                format: bold,
+            },
+            RichTextSegment {
+                text: " World".to_string(),
+                format: red,
+            },
+        ]);
+        assert_eq!(rich.to_string(), "Hello World");
     }
 
     #[test]

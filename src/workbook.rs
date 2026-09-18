@@ -697,6 +697,7 @@ impl Workbook {
                         .map(|cell| match cell {
                             Cell::Text(s) => Cell::Text(s.clone()),
                             Cell::Number(n) => Cell::Number(*n),
+                            Cell::RichText(segments) => Cell::RichText(segments.clone()),
                             Cell::Boolean(b) => Cell::Boolean(*b),
                         })
                 })
@@ -1412,6 +1413,28 @@ impl Workbook {
                                         cell_fmt,
                                     )?;
                                 }
+                                Cell::RichText(segments) => {
+                                    // 富文本：将每个片段映射为 (&Format, &str) 元组，
+                                    // 交给 rust_xlsxwriter 生成富文本 run。
+                                    // 过滤掉空文本片段：rust_xlsxwriter 不允许空片段，
+                                    // 且空片段对拼接结果无影响（与 .xls 路径的降级行为一致）。
+                                    let refs: Vec<(&Format, &str)> = segments
+                                        .iter()
+                                        .filter(|seg| !seg.text.is_empty())
+                                        .map(|seg| (&seg.format, seg.text.as_str()))
+                                        .collect();
+                                    if refs.is_empty() {
+                                        // 全部为空片段：写入空单元格保持样式一致性
+                                        worksheet.write_blank(abs_row, c, cell_fmt)?;
+                                    } else {
+                                        worksheet.write_rich_string_with_format(
+                                            abs_row,
+                                            c,
+                                            &refs,
+                                            cell_fmt,
+                                        )?;
+                                    }
+                                }
                                 Cell::Number(n) => {
                                     worksheet.write_number_with_format(abs_row, c, *n, cell_fmt)?;
                                 }
@@ -1446,8 +1469,7 @@ impl Workbook {
 
             // --- 步骤4: 全局列宽处理 ---
             // 收集所有列宽设置，冲突时取最大值
-            let mut col_width_settings: std::collections::HashMap<u16, f64> =
-                std::collections::HashMap::new();
+            let mut col_width_settings: HashMap<u16, f64> = HashMap::new();
 
             for region in &sheet.regions {
                 if region.row_count() == 0 {

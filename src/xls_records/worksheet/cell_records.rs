@@ -472,6 +472,19 @@ pub fn row_data_to_cell_records(
                 );
                 i += 1;
             }
+            Some(Cell::RichText(segments)) => {
+                // .xls（BIFF8）共享字符串表只存储纯文本，富文本在此降级为纯文本。
+                let text = segments.iter().map(|s| s.text.clone()).collect::<String>();
+                if text.is_empty() {
+                    i += 1;
+                } else {
+                    let sst_idx = sst.add(text) as u32;
+                    result.extend_from_slice(
+                        &LabelSSTRecord::new(row, col, xf_index, sst_idx).serialize(),
+                    );
+                    i += 1;
+                }
+            }
             Some(Cell::Number(num)) => {
                 // 非有限值（NaN/Inf/-Inf）视为空单元格，直接跳过。
                 // 同时避免 encode_rk_value 返回 None 导致 count == 0 的无限循环。

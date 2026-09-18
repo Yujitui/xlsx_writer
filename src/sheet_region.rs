@@ -66,6 +66,10 @@ impl SheetRegion {
                     .enumerate()
                     .map(|(idx, cell)| match cell {
                         Some(Cell::Text(s)) if !s.is_empty() => s.clone(),
+                        Some(Cell::RichText(segments)) if !segments.is_empty() => segments
+                            .iter()
+                            .map(|s| s.text.clone())
+                            .collect::<String>(),
                         _ => format!("Column_{}", idx),
                     })
                     .collect()
@@ -97,6 +101,7 @@ impl SheetRegion {
                 // 检测类型
                 match cell {
                     Some(Cell::Text(_)) => has_text = true,
+                    Some(Cell::RichText(_)) => has_text = true,
                     Some(Cell::Number(_)) => has_number = true,
                     Some(Cell::Boolean(_)) => has_boolean = true,
                     None => {}
@@ -113,6 +118,13 @@ impl SheetRegion {
                 .into_iter()
                 .map(|cell| match cell {
                     Some(Cell::Text(s)) => AnyValue::StringOwned(s.clone().into()),
+                    Some(Cell::RichText(segments)) => {
+                        let text = segments
+                            .iter()
+                            .map(|s| s.text.clone())
+                            .collect::<String>();
+                        AnyValue::StringOwned(text.into())
+                    }
                     Some(Cell::Number(n)) => {
                         if is_mixed {
                             AnyValue::StringOwned(n.to_string().into())

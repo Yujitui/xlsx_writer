@@ -24,3 +24,4 @@ pub use crate::print_options::{
 // 5. 外部依賴的關鍵類型（方便用戶配置樣式）
 pub use polars::prelude::DataFrame;
 pub use rust_xlsxwriter::{Color, Format, FormatAlign, FormatBorder};
+pub use crate::cell::RichTextSegment;

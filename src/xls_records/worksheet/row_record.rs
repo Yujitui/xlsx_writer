@@ -33,6 +33,9 @@ impl RowRecord {
         let has_data = |c: &Option<Cell>| -> bool {
             match c {
                 Some(Cell::Text(s)) => !s.is_empty(),
+                Some(Cell::RichText(segments)) => {
+                    segments.iter().any(|s| !s.text.is_empty())
+                }
                 Some(Cell::Number(_)) | Some(Cell::Boolean(_)) => true,
                 None => false,
             }

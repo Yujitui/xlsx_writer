@@ -6,6 +6,7 @@
 //! 3. 多区域复杂报表
 //! 4. 完整配置驱动
 
+use calamine::{open_workbook, Data, Reader, Xlsx};
 use polars::prelude::*;
 use serde_json::json;
 use std::collections::HashMap;
@@ -191,7 +192,7 @@ fn test_multi_region() {
     let mut title_styles = RegionStyles::new();
     title_styles
         .cell_styles
-        .insert((0, 0), std::sync::Arc::from("title"));
+        .insert((0, 0), Arc::from("title"));
     let header_region = SheetRegion::new("header", header_data)
         .with_styles(title_styles)
         .with_merge_ranges(vec![(0, 0, 0, 3)]);
@@ -218,16 +219,16 @@ fn test_multi_region() {
     let mut detail_styles = RegionStyles::new();
     detail_styles
         .cell_styles
-        .insert((2, 3), std::sync::Arc::from("highlight"));
+        .insert((2, 3), Arc::from("highlight"));
     detail_styles
         .cell_styles
-        .insert((4, 3), std::sync::Arc::from("highlight"));
+        .insert((4, 3), Arc::from("highlight"));
 
     let detail_region = SheetRegion::from_dataframe(detail_df, "detail", Some(true), detail_styles)
         .expect("Failed to create detail region");
 
     // 创建样式库
-    let styles = serde_json::json!({
+    let styles = json!({
         "title": {
             "font_name": "Microsoft YaHei",
             "font_size": 16,
@@ -1030,4 +1031,170 @@ fn test_xls_with_nan_numbers() {
 
     println!("\n✅ 测试通过: 含 NaN 数字的 .xls - {}", output_xls);
     cleanup_old_files("test_nan_numbers");
+}
+
+/// 测试：富文本单元格写入 .xlsx 与 .xls（.xls 降级为纯文本）
+#[test]
+fn test_rich_text_cell_write() {
+    setup();
+
+    use xlsx_writer::cell::RichTextSegment;
+
+    let rich = Cell::RichText(vec![
+        RichTextSegment {
+            text: "Hello ".to_string(),
+            format: Format::new().set_bold(),
+        },
+        RichTextSegment {
+            text: "World".to_string(),
+            format: Format::new().set_font_color(Color::Red),
+        },
+    ]);
+
+    let region = SheetRegion::new(
+        "data",
+        vec![vec![
+            Some(Cell::Text("Label".to_string())),
+            Some(rich.clone()),
+        ]],
+    );
+    let sheet = WorkSheet::new("Rich", vec![region]).expect("create sheet");
+
+    // .xlsx：写入成功且可被读取回拼接文本
+    let output_xlsx = format!("{}/test_rich_text.xlsx", DATA_DIR);
+    Workbook::new()
+        .expect("create workbook")
+        .add_sheet(sheet)
+        .save(&output_xlsx)
+        .expect("save xlsx rich text");
+    assert!(Path::new(&output_xlsx).exists(), "XLSX should exist");
+
+    // 读回 .xlsx，验证富文本片段被正确拼接为 "Hello World"
+    let texts = read_xlsx_strings(&output_xlsx, "Rich");
+    assert!(
+        texts.iter().any(|t| t == "Hello World"),
+        "expected concatenated rich text 'Hello World', got: {:?}",
+        texts
+    );
+
+    // .xls：富文本降级为纯文本写入成功
+    let output_xls = format!("{}/test_rich_text.xls", DATA_DIR);
+    Workbook::new()
+        .expect("create workbook")
+        .add_sheet(WorkSheet::new(
+            "Rich",
+            vec![SheetRegion::new(
+                "data",
+                vec![vec![
+                    Some(Cell::Text("Label".to_string())),
+                    Some(rich),
+                ]],
+            )],
+        )
+        .expect("create sheet"))
+        .save(&output_xls)
+        .expect("save xls rich text");
+    assert!(Path::new(&output_xls).exists(), "XLS should exist");
+
+    println!("\n✅ 测试通过: 富文本单元格 - xlsx/xls");
+    cleanup_old_files("test_rich_text");
+}
+
+/// 测试：空片段/空富文本不应导致导出失败（.xlsx 与 .xls 行为一致）
+#[test]
+fn test_rich_text_empty_segments() {
+    setup();
+
+    use xlsx_writer::cell::RichTextSegment;
+
+    let empty_segment_rich = Cell::RichText(vec![
+        RichTextSegment {
+            text: "  ".to_string(),
+            format: Format::new(),
+        },
+        RichTextSegment {
+            text: "OK".to_string(),
+            format: Format::new().set_bold(),
+        },
+        RichTextSegment {
+            text: String::new(),
+            format: Format::new(),
+        },
+    ]);
+    let fully_empty_rich = Cell::RichText(vec![
+        RichTextSegment {
+            text: String::new(),
+            format: Format::new(),
+        },
+        RichTextSegment {
+            text: "".to_string(),
+            format: Format::new(),
+        },
+    ]);
+    let empty_vec_rich = Cell::RichText(vec![]);
+
+    let region = SheetRegion::new(
+        "data",
+        vec![vec![
+            Some(empty_segment_rich.clone()),
+            Some(fully_empty_rich.clone()),
+            Some(empty_vec_rich),
+        ]],
+    );
+    let sheet = WorkSheet::new("EmptyRich", vec![region]).expect("create sheet");
+
+    // .xlsx：含空片段的富文本应正常导出，且拼接结果忽略空片段
+    let output_xlsx = format!("{}/test_rich_text_empty.xlsx", DATA_DIR);
+    Workbook::new()
+        .expect("create workbook")
+        .add_sheet(sheet)
+        .save(&output_xlsx)
+        .expect("save xlsx with empty rich text segments");
+    assert!(Path::new(&output_xlsx).exists(), "XLSX should exist");
+
+    let texts = read_xlsx_strings(&output_xlsx, "EmptyRich");
+    assert!(
+        texts.iter().any(|t| t == "  OK"),
+        "expected '  OK' after filtering empty segments, got: {:?}",
+        texts
+    );
+
+    // .xls：同样的输入也应正常导出（降级为纯文本，空片段被跳过）
+    let output_xls = format!("{}/test_rich_text_empty.xls", DATA_DIR);
+    Workbook::new()
+        .expect("create workbook")
+        .add_sheet(WorkSheet::new(
+            "EmptyRich",
+            vec![SheetRegion::new(
+                "data",
+                vec![vec![
+                    Some(empty_segment_rich),
+                    Some(fully_empty_rich),
+                    Some(Cell::RichText(vec![])),
+                ]],
+            )],
+        )
+        .expect("create sheet"))
+        .save(&output_xls)
+        .expect("save xls with empty rich text segments");
+    assert!(Path::new(&output_xls).exists(), "XLS should exist");
+
+    println!("\n✅ 测试通过: 空富文本片段 - xlsx/xls");
+    cleanup_old_files("test_rich_text_empty");
+}
+
+/// 读取 .xlsx 中指定 sheet 的所有字符串单元格
+fn read_xlsx_strings(path: &str, sheet_name: &str) -> Vec<String> {
+    let mut workbook: Xlsx<_> = open_workbook(path).expect("open xlsx");
+    let range = workbook
+        .worksheet_range(sheet_name)
+        .expect("read worksheet range");
+    range
+        .rows()
+        .flat_map(|row| row.iter())
+        .filter_map(|cell| match cell {
+            Data::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect()
 }
